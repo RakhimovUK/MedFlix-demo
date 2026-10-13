@@ -52,6 +52,7 @@ import {
   parseTelegramPostLink,
   type TelegramPostReference,
 } from "./catalog-content";
+import { copyContentsPosts } from "./contents-delivery";
 import { logger } from "../lib/logger";
 
 type TelegramResponse<T> = {
@@ -314,7 +315,7 @@ function formatStructurePost(): string {
     "• Telegram Bot API + long polling",
     "• Kino yetkazish: copyMessage",
     "• Qidiruv: kod va nom bo‘yicha",
-    "• Katalog: janrlar va inline tugmalar",
+    "• Katalog: baza kanaldagi Mundarija posti",
     "",
     "👤 USER FLOW",
     "• /start — welcome va start video",
@@ -682,6 +683,45 @@ function catalogKeyboard(
   ];
 
   return rows.length > 0 ? { inline_keyboard: rows } : undefined;
+}
+
+/** "Katalog" tugmasi: baza kanaldagi Mundarija postlarini (contents_posts) nusxalab yuboradi. */
+async function sendContents(chatId: number): Promise<void> {
+  const movies = listMovies();
+  const series = listSeries();
+  if (movies.length === 0 && series.length === 0) {
+    await sendText(chatId, "Katalog hozircha bo‘sh.");
+    return;
+  }
+
+  const refs = getContentsPostReferences();
+  const pageCount = buildContentsPages(movies, series, botUsername).length;
+  const result = await copyContentsPosts({
+    refs,
+    pageCount,
+    exclude: getStructurePostReference(),
+    copy: async (ref) => {
+      await telegramApi("copyMessage", {
+        chat_id: chatId,
+        from_chat_id: ref.chatId,
+        message_id: ref.messageId,
+      });
+    },
+    onError: (ref, err) => {
+      logger.warn(
+        { err, chatId: ref.chatId, messageId: ref.messageId },
+        "Failed to copy contents post to user",
+      );
+    },
+  });
+
+  if (result.sent === 0) {
+    logger.error({ refs }, "Contents posts could not be delivered");
+    await sendText(
+      chatId,
+      "📚 Mundarija hozir mavjud emas. Kino yoki serial kodini yuboring yoki 🔍 Qidirish tugmasidan foydalaning.",
+    );
+  }
 }
 
 async function sendCatalog(chatId: number): Promise<void> {
@@ -1241,7 +1281,7 @@ async function handleCallbackQueryInner(
   await answerCallbackQuery(callbackQuery.id);
 
   if (data === "catalog") {
-    await sendCatalog(chatId);
+    await sendContents(chatId);
     return;
   }
 
@@ -1479,7 +1519,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
 
     if (command === "/catalog") {
-      await sendCatalog(chatId);
+      await sendContents(chatId);
       return;
     }
 
