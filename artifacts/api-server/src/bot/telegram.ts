@@ -1740,7 +1740,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
       if (fileId) {
         pendingPosterRequests.delete(String(userId));
-        await saveSeriesPosterFromAdmin(chatId, code, fileId);
+        await saveSeriesPosterFromAdmin(
+          chatId,
+          code,
+          fileId,
+          message.photo ? undefined : message.reply_to_message?.caption,
+        );
         return;
       }
 
