@@ -45,6 +45,7 @@ import {
   parseEpisodeId,
 } from "./series-navigation";
 import { buildSeriesCaption, normalizeDescription } from "./series-card";
+import { createNavCleanup, shouldCleanup } from "./nav-cleanup";
 import {
   buildContentsPages,
   formatTelegramPostLink,
@@ -115,6 +116,12 @@ const pendingForwardedPosts = new Map<
   { channelChatId: string; channelMessageId: number }
 >();
 const pendingPosterRequests = new Map<string, { code: string; expiresAt: number }>();
+
+// Chat tarixini qisqa saqlash: tugma bosilganda oldingi xabarlar o'chiriladi.
+const navCleanup = createNavCleanup(async (chatId, messageId) => {
+  await telegramApi("deleteMessage", { chat_id: chatId, message_id: messageId });
+});
+const OUTGOING_METHODS = new Set(["sendMessage", "sendPhoto", "sendVideo", "copyMessage"]);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
 type ReplyMarkup = {
@@ -144,6 +151,10 @@ async function telegramApi<T>(
   const payload = (await response.json()) as TelegramResponse<T>;
   if (!response.ok || !payload.ok) {
     throw new Error(payload.description ?? `Telegram API error: ${response.status}`);
+  }
+
+  if (OUTGOING_METHODS.has(method) && typeof body.chat_id === "number") {
+    navCleanup.noteSent(body.chat_id);
   }
 
   return payload.result;
@@ -1047,7 +1058,12 @@ async function sendEpisodeList(
   }
 
   for (const page of buildEpisodeListPages(series.title, series.code, episodes)) {
-    await sendText(chatId, page.text, { inline_keyboard: page.keyboard });
+    const sent = await telegramApi<{ message_id: number }>("sendMessage", {
+      chat_id: chatId,
+      text: page.text,
+      reply_markup: { inline_keyboard: page.keyboard },
+    });
+    navCleanup.track(chatId, sent.message_id);
   }
 }
 
@@ -1165,6 +1181,19 @@ async function answerCallbackQuery(
 }
 
 async function handleCallbackQuery(
+  callbackQuery: TelegramCallbackQuery,
+): Promise<void> {
+  const tapped = callbackQuery.message;
+  if (!tapped || !shouldCleanup(callbackQuery.data ?? "")) {
+    await handleCallbackQueryInner(callbackQuery);
+    return;
+  }
+  await navCleanup.run(tapped.chat.id, tapped.message_id, () =>
+    handleCallbackQueryInner(callbackQuery),
+  );
+}
+
+async function handleCallbackQueryInner(
   callbackQuery: TelegramCallbackQuery,
 ): Promise<void> {
   const message = callbackQuery.message;
