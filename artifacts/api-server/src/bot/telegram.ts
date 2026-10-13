@@ -15,6 +15,7 @@ import {
   findSeriesEpisodeById,
   clearSeriesPoster,
   getSeriesPoster,
+  getSeriesPosterCaption,
   getSeriesProgress,
   saveSeriesProgress,
   setSeriesPoster,
@@ -43,6 +44,7 @@ import {
   getEpisodeNeighbors,
   parseEpisodeId,
 } from "./series-navigation";
+import { buildSeriesCaption, normalizeDescription } from "./series-card";
 import {
   buildContentsPages,
   formatTelegramPostLink,
@@ -725,15 +727,13 @@ async function sendSeriesEpisodes(
   }
 
   const seasons = listSeriesSeasons(seriesCode);
-  const caption = [
-    `📺 ${series.title.slice(0, 200)}`,
-    "",
-    `🔢 Kod: ${series.code}`,
-    seasons.length === 1
-      ? `📂 ${seasons[0]}-fasl`
-      : `📂 Fasllar: ${seasons.length} ta`,
-    `🎬 ${episodes.length} ta qism`,
-  ].join("\n");
+  const caption = buildSeriesCaption({
+    title: series.title,
+    code: series.code,
+    seasons,
+    episodeCount: episodes.length,
+    description: getSeriesPosterCaption(series.code),
+  });
 
   const rows: InlineKeyboardButton[][] = [];
   const progress = getSeriesProgress(chatId, series.code);
@@ -1126,6 +1126,7 @@ async function saveSeriesPosterFromAdmin(
   chatId: number,
   code: string,
   fileId: string,
+  description?: string | null,
 ): Promise<void> {
   const series = findSeries(code);
   if (!series) {
@@ -1138,13 +1139,17 @@ async function saveSeriesPosterFromAdmin(
     return;
   }
 
-  setSeriesPoster(code, fileId);
+  const desc = normalizeDescription(description);
+  setSeriesPoster(code, fileId, desc);
   await sendText(
     chatId,
     [
       "✅ Poster muvaffaqiyatli saqlandi!",
       `📺 Serial: ${series.title}`,
       `🔢 Kod: ${series.code}`,
+      desc
+        ? `📝 Tavsif saqlandi (${desc.length} belgi)`
+        : "📝 Tavsif: matn yo'q (kanal postini forward qilsangiz matn ham olinadi)",
     ].join("\n"),
   );
 }
@@ -1331,6 +1336,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         chatId,
         pendingPoster.code,
         message.photo[message.photo.length - 1]!.file_id,
+        message.caption,
       );
       return;
     } else if (!text && !forwardedPost) {
@@ -1753,7 +1759,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         code,
         expiresAt: Date.now() + 10 * 60 * 1000,
       });
-      await sendText(chatId, `📸 ${code} kodi uchun serial posterini yuboring.`);
+      await sendText(
+        chatId,
+        `📸 ${code} uchun baza kanaldagi poster postini (rasm + matn) forward qiling yoki oddiy rasm yuboring.`,
+      );
       return;
     }
 
@@ -1793,7 +1802,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         await telegramApi("sendPhoto", {
           chat_id: chatId,
           photo: poster,
-          caption: `✅ Poster biriktirilgan\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}`,
+          caption: `✅ Poster biriktirilgan\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}\n📝 Tavsif: ${getSeriesPosterCaption(series.code) ? "bor" : "yo'q"}`,
         });
       } catch (err: unknown) {
         logger.warn({ err, code: series.code }, "Failed to preview series poster");

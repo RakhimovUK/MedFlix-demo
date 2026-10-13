@@ -54,3 +54,13 @@ test("poster o'chirish: bor bo'lsa true, yo'q bo'lsa false, serial saqlanadi", (
   assert.ok(db.findSeries("B"));
   assert.equal(db.listSeriesEpisodes("B").length, 1);
 });
+
+test("poster tavsifi: saqlanadi, bo'sh bo'lsa eskisi qoladi, o'chirilganda tozalanadi", () => {
+  db.setSeriesPoster("A", "F1", "The Pitt tavsifi");
+  assert.equal(db.getSeriesPosterCaption("A"), "The Pitt tavsifi");
+  db.setSeriesPoster("A", "F2");
+  assert.equal(db.getSeriesPosterCaption("A"), "The Pitt tavsifi");
+  assert.equal(db.getSeriesPoster("A"), "F2");
+  db.clearSeriesPoster("A");
+  assert.equal(db.getSeriesPosterCaption("A"), null);
+});

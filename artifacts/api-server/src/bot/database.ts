@@ -195,6 +195,9 @@ const seriesColumns = database
 if (!seriesColumns.some((column) => column.name === "poster_file_id")) {
   database.exec("ALTER TABLE series ADD COLUMN poster_file_id TEXT");
 }
+if (!seriesColumns.some((column) => column.name === "poster_caption")) {
+  database.exec("ALTER TABLE series ADD COLUMN poster_caption TEXT");
+}
 
 database.exec(`
   CREATE TABLE IF NOT EXISTS series_progress (
@@ -512,16 +515,22 @@ export function createDatabaseBackup(targetPath: string): void {
 export function clearSeriesPoster(seriesCode: string): boolean {
   const result = database
     .prepare(
-      "UPDATE series SET poster_file_id = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
+      "UPDATE series SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
     )
     .run(seriesCode);
   return Number(result.changes) > 0;
 }
 
-export function setSeriesPoster(seriesCode: string, fileId: string): boolean {
+export function setSeriesPoster(
+  seriesCode: string,
+  fileId: string,
+  caption: string | null = null,
+): boolean {
   const result = database
-    .prepare("UPDATE series SET poster_file_id = ? WHERE code = ?")
-    .run(fileId, seriesCode);
+    .prepare(
+      "UPDATE series SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ?",
+    )
+    .run(fileId, caption, seriesCode);
   return Number(result.changes) > 0;
 }
 
@@ -531,6 +540,14 @@ export function getSeriesPoster(seriesCode: string): string | null {
     .get(seriesCode) as Record<string, unknown> | undefined;
   const value = row?.poster_file_id;
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function getSeriesPosterCaption(seriesCode: string): string | null {
+  const row = database
+    .prepare("SELECT poster_caption FROM series WHERE code = ?")
+    .get(seriesCode) as Record<string, unknown> | undefined;
+  const value = row?.poster_caption;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 export function saveSeriesProgress(chatId: number, episodeId: number): void {
