@@ -189,6 +189,25 @@ function mapSeries(row: Record<string, unknown>): Series {
   };
 }
 
+const seriesColumns = database
+  .prepare("PRAGMA table_info(series)")
+  .all() as Array<Record<string, unknown>>;
+if (!seriesColumns.some((column) => column.name === "poster_file_id")) {
+  database.exec("ALTER TABLE series ADD COLUMN poster_file_id TEXT");
+}
+
+database.exec(`
+  CREATE TABLE IF NOT EXISTS series_progress (
+    chat_id INTEGER NOT NULL,
+    series_id INTEGER NOT NULL,
+    episode_id INTEGER NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chat_id, series_id),
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE,
+    FOREIGN KEY (episode_id) REFERENCES series_episodes(id) ON DELETE CASCADE
+  );
+`);
+
 function mapSeriesEpisode(row: Record<string, unknown>): SeriesEpisode {
   return {
     id: Number(row.id),
@@ -488,6 +507,56 @@ export function updateSeriesEpisodeTitle(
 /** Ishlayotgan bazaning izchil nusxasini (WAL bilan ham) yangi faylga yozadi. */
 export function createDatabaseBackup(targetPath: string): void {
   database.prepare("VACUUM INTO ?").run(targetPath);
+}
+
+export function setSeriesPoster(seriesCode: string, fileId: string): boolean {
+  const result = database
+    .prepare("UPDATE series SET poster_file_id = ? WHERE code = ?")
+    .run(fileId, seriesCode);
+  return Number(result.changes) > 0;
+}
+
+export function getSeriesPoster(seriesCode: string): string | null {
+  const row = database
+    .prepare("SELECT poster_file_id FROM series WHERE code = ?")
+    .get(seriesCode) as Record<string, unknown> | undefined;
+  const value = row?.poster_file_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function saveSeriesProgress(chatId: number, episodeId: number): void {
+  database
+    .prepare(
+      `INSERT INTO series_progress (chat_id, series_id, episode_id)
+       SELECT ?, series_id, id FROM series_episodes WHERE id = ?
+       ON CONFLICT(chat_id, series_id) DO UPDATE SET
+         episode_id = excluded.episode_id,
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+    .run(chatId, episodeId);
+}
+
+export function getSeriesProgress(
+  chatId: number,
+  seriesCode: string,
+): (SeriesEpisode & { seriesCode: string }) | null {
+  const row = database
+    .prepare(
+      `SELECT series_episodes.id, series_episodes.series_id,
+              series_episodes.season_number, series_episodes.episode_number,
+              series_episodes.title, series_episodes.channel_chat_id,
+              series_episodes.channel_message_id, series_episodes.created_at,
+              series.code AS series_code
+       FROM series_progress
+       INNER JOIN series ON series.id = series_progress.series_id
+       INNER JOIN series_episodes ON series_episodes.id = series_progress.episode_id
+       WHERE series_progress.chat_id = ? AND series.code = ?`,
+    )
+    .get(chatId, seriesCode) as Record<string, unknown> | undefined;
+
+  return row
+    ? { ...mapSeriesEpisode(row), seriesCode: String(row.series_code) }
+    : null;
 }
 
 export function deleteSeries(code: string): boolean {

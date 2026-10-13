@@ -13,6 +13,10 @@ import {
   findSeries,
   findSeriesEpisode,
   findSeriesEpisodeById,
+  getSeriesPoster,
+  getSeriesProgress,
+  saveSeriesProgress,
+  setSeriesPoster,
   getSetting,
   listMovies,
   listSeries,
@@ -33,6 +37,8 @@ import {
 import {
   buildEpisodeListPages,
   buildEpisodeNavigationRows,
+  episodeCallback,
+  episodeListCallback,
   getEpisodeNeighbors,
   parseEpisodeId,
 } from "./series-navigation";
@@ -74,6 +80,7 @@ type TelegramMessage = {
   from?: TelegramUser;
   text?: string;
   caption?: string;
+  photo?: Array<{ file_id: string }>;
   forward_origin?: TelegramForwardOrigin;
   forward_from_chat?: TelegramChat;
   forward_from_message_id?: number;
@@ -307,6 +314,7 @@ function formatStructurePost(): string {
     "• /addseries KOD | Serial nomi",
     "• /addpart KOD | Fasl | Qism | Nomi",
     "• /editpart KOD | Fasl | Qism | Yangi nom",
+    "• /setposter KOD — rasm captioni yoki rasmga reply",
     "• /backup — bazaning zaxira nusxasi",
     "• /genre KOD | Janr 1, Janr 2",
     "• /setstart",
@@ -538,6 +546,7 @@ async function configureBotCommands(): Promise<void> {
     { command: "addpart", description: "Serial qismi qo‘shish" },
     { command: "editpart", description: "Serial qismi nomini tahrirlash" },
     { command: "backup", description: "Bazaning zaxira nusxasini olish" },
+    { command: "setposter", description: "Serial posterini o‘rnatish" },
     { command: "genre", description: "Kino janrini belgilash" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
@@ -711,27 +720,59 @@ async function sendSeriesEpisodes(
   }
 
   const seasons = listSeriesSeasons(seriesCode);
-  if (seasons.length > 1) {
-    await sendText(
-      chatId,
-      [
-        `📺 ${series.title}`,
-        `Fasllar soni: ${seasons.length}`,
-        "Ko‘rish uchun faslni tanlang:",
-      ].join("\n"),
+  const caption = [
+    `📺 ${series.title.slice(0, 200)}`,
+    "",
+    `🔢 Kod: ${series.code}`,
+    seasons.length === 1
+      ? `📂 ${seasons[0]}-fasl`
+      : `📂 Fasllar: ${seasons.length} ta`,
+    `🎬 ${episodes.length} ta qism`,
+  ].join("\n");
+
+  const rows: InlineKeyboardButton[][] = [];
+  const progress = getSeriesProgress(chatId, series.code);
+  if (progress) {
+    rows.push([
       {
-        inline_keyboard: seasons.map((seasonNumber) => [
-          {
-            text: `${seasonNumber}-fasl`,
-            callback_data: `season:${encodeCallbackValue(series.code)}:${seasonNumber}`,
-          },
-        ]),
+        text: `▶️ Davom ettirish — ${progress.seasonNumber}-fasl, ${progress.episodeNumber}-qism`,
+        callback_data: episodeCallback(progress.id),
       },
-    );
-    return;
+    ]);
+  }
+  for (const seasonNumber of seasons) {
+    const count = episodes.filter((e) => e.seasonNumber === seasonNumber).length;
+    rows.push([
+      {
+        text: `📂 ${seasonNumber}-fasl — ${count} ta qism`,
+        callback_data: `season:${encodeCallbackValue(series.code)}:${seasonNumber}`,
+      },
+    ]);
+  }
+  rows.push([
+    { text: "📋 Barcha qismlar", callback_data: episodeListCallback(episodes[0]!.id) },
+  ]);
+  const replyMarkup = { inline_keyboard: rows };
+
+  const poster = getSeriesPoster(series.code);
+  if (poster) {
+    try {
+      await telegramApi("sendPhoto", {
+        chat_id: chatId,
+        photo: poster,
+        caption,
+        reply_markup: replyMarkup,
+      });
+      return;
+    } catch (err: unknown) {
+      logger.warn(
+        { err, seriesCode: series.code },
+        "Failed to send series poster; falling back to text",
+      );
+    }
   }
 
-  await sendSeriesSeasonEpisodes(chatId, series.code, seasons[0] ?? 1);
+  await sendText(chatId, caption, replyMarkup);
 }
 
 async function sendSeriesSeasonEpisodes(
@@ -920,6 +961,7 @@ async function deliverSeriesEpisode(
   }
 
   setLastDeliveredEpisodeMessage(chatId, seriesCode, deliveredMessageId);
+  saveSeriesProgress(chatId, episode.id);
 
   if (previousMessageId !== null && previousMessageId !== deliveredMessageId) {
     try {
@@ -1399,6 +1441,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/addpart" ||
         command === "/editpart" ||
         command === "/backup" ||
+        command === "/setposter" ||
         command === "/genre" ||
         command === "/setstart" ||
         command === "/setstructure" ||
@@ -1613,6 +1656,31 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         chatId,
         `${code} serialining ${seasonNumber}-fasl ${episodeNumber}-qismi bazaga saqlandi.`,
       );
+      return;
+    }
+
+    if (command === "/setposter") {
+      const code = normalizeCode(args);
+      const photos = message.photo ?? message.reply_to_message?.photo;
+      const fileId = photos && photos.length > 0 ? photos[photos.length - 1]!.file_id : null;
+
+      if (!code || !fileId) {
+        await sendText(
+          chatId,
+          [
+            "Format: rasm yuboring va captionga /setposter SERIAL_KOD yozing,",
+            "yoki rasmga reply qilib /setposter SERIAL_KOD yuboring.",
+            "Masalan: /setposter 101",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      if (!setSeriesPoster(code, fileId)) {
+        await sendText(chatId, `${code} seriali topilmadi.`);
+        return;
+      }
+      await sendText(chatId, `${code} seriali posteri saqlandi.`);
       return;
     }
 
