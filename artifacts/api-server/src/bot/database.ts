@@ -407,6 +407,27 @@ export function findSeriesEpisode(
   return row ? mapSeriesEpisode(row) : null;
 }
 
+export function findSeriesEpisodeById(
+  episodeId: number,
+): (SeriesEpisode & { seriesCode: string }) | null {
+  const row = database
+    .prepare(
+      `SELECT series_episodes.id, series_episodes.series_id,
+              series_episodes.season_number, series_episodes.episode_number,
+              series_episodes.title, series_episodes.channel_chat_id,
+              series_episodes.channel_message_id, series_episodes.created_at,
+              series.code AS series_code
+       FROM series_episodes
+       INNER JOIN series ON series.id = series_episodes.series_id
+       WHERE series_episodes.id = ?`,
+    )
+    .get(episodeId) as Record<string, unknown> | undefined;
+
+  return row
+    ? { ...mapSeriesEpisode(row), seriesCode: String(row.series_code) }
+    : null;
+}
+
 export function upsertSeriesEpisode(input: {
   seriesCode: string;
   seasonNumber: number;

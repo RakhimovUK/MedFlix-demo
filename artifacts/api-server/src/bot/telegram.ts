@@ -8,6 +8,7 @@ import {
   listMoviePosts,
   findSeries,
   findSeriesEpisode,
+  findSeriesEpisodeById,
   getSetting,
   listMovies,
   listSeries,
@@ -24,6 +25,12 @@ import {
   upsertMovie,
   upsertMoviePost,
 } from "./database";
+import {
+  buildEpisodeListPages,
+  buildEpisodeNavigationRows,
+  getEpisodeNeighbors,
+  parseEpisodeId,
+} from "./series-navigation";
 import {
   buildContentsPages,
   formatTelegramPostLink,
@@ -781,21 +788,22 @@ async function deliverChannelPost(
     channelMessageId: number;
   },
   kind: "Kino" | "Qism",
+  extraRows: InlineKeyboardButton[][] = [],
 ): Promise<number | null> {
   try {
     const discussionUrl = getDiscussionUrl();
+    const keyboardRows: InlineKeyboardButton[][] = [
+      ...extraRows,
+      ...(discussionUrl
+        ? [[{ text: "💬 Muhokama qilish", url: discussionUrl }]]
+        : []),
+    ];
     const result = await telegramApi<{ message_id: number }>("copyMessage", {
       chat_id: chatId,
       from_chat_id: reference.channelChatId,
       message_id: reference.channelMessageId,
-      ...(discussionUrl
-        ? {
-            reply_markup: {
-              inline_keyboard: [[
-                { text: "💬 Muhokama qilish", url: discussionUrl },
-              ]],
-            },
-          }
+      ...(keyboardRows.length > 0
+        ? { reply_markup: { inline_keyboard: keyboardRows } }
         : {}),
     });
     return result.message_id;
@@ -879,6 +887,14 @@ async function deliverSeriesEpisode(
 
   const previousMessageId = getLastDeliveredEpisodeMessage(chatId, seriesCode);
 
+  const neighbors = getEpisodeNeighbors(
+    listSeriesEpisodes(seriesCode),
+    episode.id,
+  );
+  const navigationRows = neighbors
+    ? buildEpisodeNavigationRows(neighbors, episode.id)
+    : [];
+
   const deliveredMessageId = await deliverChannelPost(
     chatId,
     {
@@ -887,6 +903,7 @@ async function deliverSeriesEpisode(
       channelMessageId: episode.channelMessageId,
     },
     "Qism",
+    navigationRows,
   );
 
   if (deliveredMessageId === null) {
@@ -962,6 +979,56 @@ function getForwardedChannelPost(
   return null;
 }
 
+async function sendEpisodeList(
+  chatId: number,
+  seriesCode: string,
+): Promise<void> {
+  const series = findSeries(seriesCode);
+  const episodes = series ? listSeriesEpisodes(seriesCode) : [];
+  if (!series || episodes.length === 0) {
+    await sendText(chatId, "Bu serialda qismlar topilmadi.");
+    return;
+  }
+
+  for (const page of buildEpisodeListPages(series.title, series.code, episodes)) {
+    await sendText(chatId, page.text, { inline_keyboard: page.keyboard });
+  }
+}
+
+async function handleEpisodeNavigationCallback(
+  callbackQuery: TelegramCallbackQuery,
+  chatId: number,
+): Promise<boolean> {
+  const data = callbackQuery.data ?? "";
+  const isList = data.startsWith("eps:");
+  if (!isList && !data.startsWith("ep:")) {
+    return false;
+  }
+
+  const episodeId = parseEpisodeId(data.slice(isList ? 4 : 3));
+  const episode = episodeId === null ? null : findSeriesEpisodeById(episodeId);
+  if (!episode) {
+    await answerCallbackQuery(
+      callbackQuery.id,
+      "Bu qism topilmadi yoki o‘chirilgan.",
+    );
+    return true;
+  }
+
+  await answerCallbackQuery(callbackQuery.id);
+  if (isList) {
+    await sendEpisodeList(chatId, episode.seriesCode);
+  } else {
+    await deliverSeriesEpisode(
+      chatId,
+      episode.seriesCode,
+      episode.seasonNumber,
+      episode.episodeNumber,
+    );
+  }
+  return true;
+}
+
 async function answerCallbackQuery(
   callbackQueryId: string,
   text?: string,
@@ -1010,6 +1077,10 @@ async function handleCallbackQuery(
 
   if (!(await requireSubscription(chatId, userId))) {
     await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (await handleEpisodeNavigationCallback(callbackQuery, chatId)) {
     return;
   }
 
