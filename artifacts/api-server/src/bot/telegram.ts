@@ -13,6 +13,7 @@ import {
   findSeries,
   findSeriesEpisode,
   findSeriesEpisodeById,
+  clearSeriesPoster,
   getSeriesPoster,
   getSeriesProgress,
   saveSeriesProgress,
@@ -111,6 +112,7 @@ const pendingForwardedPosts = new Map<
   string,
   { channelChatId: string; channelMessageId: number }
 >();
+const pendingPosterRequests = new Map<string, { code: string; expiresAt: number }>();
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
 type ReplyMarkup = {
@@ -314,7 +316,8 @@ function formatStructurePost(): string {
     "• /addseries KOD | Serial nomi",
     "• /addpart KOD | Fasl | Qism | Nomi",
     "• /editpart KOD | Fasl | Qism | Yangi nom",
-    "• /setposter KOD — rasm captioni yoki rasmga reply",
+    "• /setposter KOD — poster qo‘shish/yangilash",
+    "• /delposter KOD · /getposter KOD",
     "• /backup — bazaning zaxira nusxasi",
     "• /genre KOD | Janr 1, Janr 2",
     "• /setstart",
@@ -547,6 +550,8 @@ async function configureBotCommands(): Promise<void> {
     { command: "editpart", description: "Serial qismi nomini tahrirlash" },
     { command: "backup", description: "Bazaning zaxira nusxasini olish" },
     { command: "setposter", description: "Serial posterini o‘rnatish" },
+    { command: "delposter", description: "Serial posterini o‘chirish" },
+    { command: "getposter", description: "Serial posteri holatini ko‘rish" },
     { command: "genre", description: "Kino janrini belgilash" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
@@ -1117,6 +1122,33 @@ async function sendDatabaseBackup(chatId: number): Promise<void> {
   }
 }
 
+async function saveSeriesPosterFromAdmin(
+  chatId: number,
+  code: string,
+  fileId: string,
+): Promise<void> {
+  const series = findSeries(code);
+  if (!series) {
+    await sendText(
+      chatId,
+      findMovie(code)
+        ? `${code} oddiy kino kodi, serial emas. Poster faqat seriallar uchun.`
+        : `${code} seriali topilmadi.`,
+    );
+    return;
+  }
+
+  setSeriesPoster(code, fileId);
+  await sendText(
+    chatId,
+    [
+      "✅ Poster muvaffaqiyatli saqlandi!",
+      `📺 Serial: ${series.title}`,
+      `🔢 Kod: ${series.code}`,
+    ].join("\n"),
+  );
+}
+
 async function answerCallbackQuery(
   callbackQueryId: string,
   text?: string,
@@ -1288,6 +1320,27 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   }
 
   const forwardedPost = getForwardedChannelPost(message);
+
+  const pendingPoster = pendingPosterRequests.get(String(userId));
+  if (pendingPoster && isAdmin(userId) && !text.startsWith("/")) {
+    if (pendingPoster.expiresAt < Date.now()) {
+      pendingPosterRequests.delete(String(userId));
+    } else if (message.photo && message.photo.length > 0) {
+      pendingPosterRequests.delete(String(userId));
+      await saveSeriesPosterFromAdmin(
+        chatId,
+        pendingPoster.code,
+        message.photo[message.photo.length - 1]!.file_id,
+      );
+      return;
+    } else if (!text && !forwardedPost) {
+      await sendText(
+        chatId,
+        "Poster uchun rasm yuboring (fayl emas, rasm sifatida). Bekor qilish uchun boshqa buyruq yuboring.",
+      );
+      return;
+    }
+  }
   if (forwardedPost && isAdmin(userId) && !text.startsWith("/")) {
     pendingForwardedPosts.set(String(userId), forwardedPost);
     await sendText(
@@ -1442,6 +1495,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/editpart" ||
         command === "/backup" ||
         command === "/setposter" ||
+        command === "/delposter" ||
+        command === "/getposter" ||
         command === "/genre" ||
         command === "/setstart" ||
         command === "/setstructure" ||
@@ -1662,25 +1717,91 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     if (command === "/setposter") {
       const code = normalizeCode(args);
       const photos = message.photo ?? message.reply_to_message?.photo;
-      const fileId = photos && photos.length > 0 ? photos[photos.length - 1]!.file_id : null;
+      const fileId =
+        photos && photos.length > 0 ? photos[photos.length - 1]!.file_id : null;
 
-      if (!code || !fileId) {
+      if (!code) {
         await sendText(
           chatId,
           [
-            "Format: rasm yuboring va captionga /setposter SERIAL_KOD yozing,",
-            "yoki rasmga reply qilib /setposter SERIAL_KOD yuboring.",
+            "Format: /setposter SERIAL_KOD, so‘ng rasm yuboring.",
+            "Yoki rasm captioniga /setposter SERIAL_KOD yozing (yoki rasmga reply qiling).",
             "Masalan: /setposter 101",
           ].join("\n"),
         );
         return;
       }
 
-      if (!setSeriesPoster(code, fileId)) {
-        await sendText(chatId, `${code} seriali topilmadi.`);
+      if (fileId) {
+        pendingPosterRequests.delete(String(userId));
+        await saveSeriesPosterFromAdmin(chatId, code, fileId);
         return;
       }
-      await sendText(chatId, `${code} seriali posteri saqlandi.`);
+
+      const series = findSeries(code);
+      if (!series) {
+        await sendText(
+          chatId,
+          findMovie(code)
+            ? `${code} oddiy kino kodi, serial emas. Poster faqat seriallar uchun.`
+            : `${code} seriali topilmadi.`,
+        );
+        return;
+      }
+
+      pendingPosterRequests.set(String(userId), {
+        code,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      });
+      await sendText(chatId, `📸 ${code} kodi uchun serial posterini yuboring.`);
+      return;
+    }
+
+    if (command === "/delposter" || command === "/getposter") {
+      const code = normalizeCode(args);
+      const series = code ? findSeries(code) : null;
+      if (!series) {
+        await sendText(
+          chatId,
+          code && findMovie(code)
+            ? `${code} oddiy kino kodi, serial emas.`
+            : `Format: ${command} SERIAL_KOD (serial topilmadi yoki kod yozilmagan).`,
+        );
+        return;
+      }
+
+      if (command === "/delposter") {
+        const removed = clearSeriesPoster(series.code);
+        await sendText(
+          chatId,
+          removed
+            ? `🗑 Poster o‘chirildi.\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}`
+            : `${series.title} (${series.code}) uchun poster biriktirilmagan.`,
+        );
+        return;
+      }
+
+      const poster = getSeriesPoster(series.code);
+      if (!poster) {
+        await sendText(
+          chatId,
+          `❌ ${series.title} (${series.code}) uchun poster biriktirilmagan.`,
+        );
+        return;
+      }
+      try {
+        await telegramApi("sendPhoto", {
+          chat_id: chatId,
+          photo: poster,
+          caption: `✅ Poster biriktirilgan\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}`,
+        });
+      } catch (err: unknown) {
+        logger.warn({ err, code: series.code }, "Failed to preview series poster");
+        await sendText(
+          chatId,
+          `Poster biriktirilgan, lekin rasmni ko‘rsatib bo‘lmadi (file_id yaroqsiz bo‘lishi mumkin). /setposter ${series.code} bilan yangilang.`,
+        );
+      }
       return;
     }
 

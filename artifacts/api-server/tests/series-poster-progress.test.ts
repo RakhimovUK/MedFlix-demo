@@ -44,3 +44,13 @@ test("progress: o'chirilgan qism va mavjud bo'lmagan ID xavfsiz", () => {
   db.deleteSeriesEpisode("A", 1, 2);
   assert.equal(db.getSeriesProgress(4, "A"), null);
 });
+
+test("poster o'chirish: bor bo'lsa true, yo'q bo'lsa false, serial saqlanadi", () => {
+  db.setSeriesPoster("B", "FILE_B");
+  assert.equal(db.clearSeriesPoster("B"), true);
+  assert.equal(db.getSeriesPoster("B"), null);
+  assert.equal(db.clearSeriesPoster("B"), false);
+  assert.equal(db.clearSeriesPoster("YOQ"), false);
+  assert.ok(db.findSeries("B"));
+  assert.equal(db.listSeriesEpisodes("B").length, 1);
+});

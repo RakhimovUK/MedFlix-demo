@@ -509,6 +509,15 @@ export function createDatabaseBackup(targetPath: string): void {
   database.prepare("VACUUM INTO ?").run(targetPath);
 }
 
+export function clearSeriesPoster(seriesCode: string): boolean {
+  const result = database
+    .prepare(
+      "UPDATE series SET poster_file_id = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
+    )
+    .run(seriesCode);
+  return Number(result.changes) > 0;
+}
+
 export function setSeriesPoster(seriesCode: string, fileId: string): boolean {
   const result = database
     .prepare("UPDATE series SET poster_file_id = ? WHERE code = ?")
