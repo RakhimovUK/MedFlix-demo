@@ -1,4 +1,8 @@
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  createDatabaseBackup,
   deleteMovie,
   deleteSeries,
   deleteSeriesEpisode,
@@ -21,6 +25,7 @@ import {
   setMovieGenres,
   searchMovies,
   upsertSeries,
+  updateSeriesEpisodeTitle,
   upsertSeriesEpisode,
   upsertMovie,
   upsertMoviePost,
@@ -301,6 +306,8 @@ function formatStructurePost(): string {
     "• /addpost KOD | Tartib | Izoh — qo‘shimcha post",
     "• /addseries KOD | Serial nomi",
     "• /addpart KOD | Fasl | Qism | Nomi",
+    "• /editpart KOD | Fasl | Qism | Yangi nom",
+    "• /backup — bazaning zaxira nusxasi",
     "• /genre KOD | Janr 1, Janr 2",
     "• /setstart",
     "• /setstructure POST_LINK",
@@ -529,6 +536,8 @@ async function configureBotCommands(): Promise<void> {
     { command: "addpost", description: "Kinoga qo‘shimcha post qo‘shish" },
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },
     { command: "addpart", description: "Serial qismi qo‘shish" },
+    { command: "editpart", description: "Serial qismi nomini tahrirlash" },
+    { command: "backup", description: "Bazaning zaxira nusxasini olish" },
     { command: "genre", description: "Kino janrini belgilash" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
@@ -1029,6 +1038,43 @@ async function handleEpisodeNavigationCallback(
   return true;
 }
 
+async function sendDatabaseBackup(chatId: number): Promise<void> {
+  const directory = mkdtempSync(path.join(tmpdir(), "medflix-backup-"));
+  try {
+    const filePath = path.join(directory, "kino-bot.sqlite");
+    createDatabaseBackup(filePath);
+    const size = statSync(filePath).size;
+    if (size > 49 * 1024 * 1024) {
+      await sendText(chatId, "Baza 50 MB dan katta, Telegram orqali yuborib bo‘lmaydi.");
+      return;
+    }
+
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("caption", `🗄 Baza zaxira nusxasi (${Math.ceil(size / 1024)} KB)`);
+    form.append(
+      "document",
+      new Blob([readFileSync(filePath)]),
+      `kino-bot-${stamp}.sqlite`,
+    );
+
+    const response = await fetch(apiUrl("sendDocument"), {
+      method: "POST",
+      body: form,
+    });
+    const payload = (await response.json()) as TelegramResponse<unknown>;
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.description ?? `Telegram API error: ${response.status}`);
+    }
+  } catch (err: unknown) {
+    logger.error({ err }, "Failed to send database backup");
+    await sendText(chatId, "Zaxira nusxasini yuborib bo‘lmadi. Loglarni tekshiring.");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 async function answerCallbackQuery(
   callbackQueryId: string,
   text?: string,
@@ -1351,6 +1397,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/addpost" ||
         command === "/addseries" ||
         command === "/addpart" ||
+        command === "/editpart" ||
+        command === "/backup" ||
         command === "/genre" ||
         command === "/setstart" ||
         command === "/setstructure" ||
@@ -1564,6 +1612,71 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       await sendText(
         chatId,
         `${code} serialining ${seasonNumber}-fasl ${episodeNumber}-qismi bazaga saqlandi.`,
+      );
+      return;
+    }
+
+    if (command === "/backup") {
+      if (chatId !== userId) {
+        await sendText(
+          chatId,
+          "Zaxira nusxasi faqat botning shaxsiy chatida yuboriladi.",
+        );
+        return;
+      }
+      await sendDatabaseBackup(chatId);
+      return;
+    }
+
+    if (command === "/editpart") {
+      const editArgs = args.split("|").map((value) => value.trim());
+      const hasSeason = editArgs.length >= 4;
+      const code = normalizeCode(editArgs[0] ?? "");
+      const seasonNumber = Number(hasSeason ? editArgs[1] : 1);
+      const episodeNumber = Number(hasSeason ? editArgs[2] : editArgs[1]);
+      const title = (hasSeason ? editArgs.slice(3) : editArgs.slice(2))
+        .join(" | ")
+        .trim();
+
+      if (
+        !code ||
+        !Number.isInteger(seasonNumber) ||
+        seasonNumber <= 0 ||
+        !Number.isInteger(episodeNumber) ||
+        episodeNumber <= 0 ||
+        !title ||
+        title.length > 100
+      ) {
+        await sendText(
+          chatId,
+          [
+            "Format: /editpart SERIAL_KOD | FASL | QISM | Yangi nom",
+            "Qisqa format (1-fasl): /editpart SERIAL_KOD | QISM | Yangi nom",
+            "Masalan: /editpart 101 | 1 | 3 | Uchinchi soat",
+            "Nom bo‘sh bo‘lmasligi va 100 belgidan oshmasligi kerak.",
+          ].join("\n"),
+        );
+        return;
+      }
+
+      const existing = findSeriesEpisode(code, seasonNumber, episodeNumber);
+      if (!existing) {
+        await sendText(
+          chatId,
+          `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi topilmadi.`,
+        );
+        return;
+      }
+
+      updateSeriesEpisodeTitle(code, seasonNumber, episodeNumber, title);
+      await refreshStructurePost();
+      await sendText(
+        chatId,
+        [
+          `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi yangilandi.`,
+          `Eski nom: ${existing.title || "—"}`,
+          `Yangi nom: ${title}`,
+        ].join("\n"),
       );
       return;
     }

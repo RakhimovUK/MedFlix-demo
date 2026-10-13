@@ -468,6 +468,28 @@ export function upsertSeriesEpisode(input: {
   );
 }
 
+export function updateSeriesEpisodeTitle(
+  seriesCode: string,
+  seasonNumber: number,
+  episodeNumber: number,
+  title: string,
+): boolean {
+  const result = database
+    .prepare(
+      `UPDATE series_episodes SET title = ?
+       WHERE season_number = ? AND episode_number = ?
+         AND series_id = (SELECT id FROM series WHERE code = ?)`,
+    )
+    .run(title, seasonNumber, episodeNumber, seriesCode);
+
+  return Number(result.changes) > 0;
+}
+
+/** Ishlayotgan bazaning izchil nusxasini (WAL bilan ham) yangi faylga yozadi. */
+export function createDatabaseBackup(targetPath: string): void {
+  database.prepare("VACUUM INTO ?").run(targetPath);
+}
+
 export function deleteSeries(code: string): boolean {
   const result = database.prepare("DELETE FROM series WHERE code = ?").run(code);
   return result.changes > 0;
