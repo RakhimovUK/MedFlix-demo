@@ -32,6 +32,9 @@ import {
   searchMovies,
   upsertSeries,
   updateSeriesEpisodeTitle,
+  updateSeriesEpisodeTitles,
+  getBotStats,
+  touchBotUser,
   upsertSeriesEpisode,
   upsertMovie,
   upsertMoviePost,
@@ -52,6 +55,15 @@ import {
   parseTelegramPostLink,
   type TelegramPostReference,
 } from "./catalog-content";
+import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
+import {
+  formatEditPartsResult,
+  formatStatsMessage,
+  parseBackupHour,
+  parseEditParts,
+  shouldRunBackup,
+  todayKey,
+} from "./admin-tools";
 import { copyContentsPosts } from "./contents-delivery";
 import { logger } from "../lib/logger";
 
@@ -123,6 +135,7 @@ const navCleanup = createNavCleanup(async (chatId, messageId) => {
   await telegramApi("deleteMessage", { chat_id: chatId, message_id: messageId });
 });
 const OUTGOING_METHODS = new Set(["sendMessage", "sendPhoto", "sendVideo", "copyMessage"]);
+const versionInfo = resolveVersion(process.env, runGit);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
 type ReplyMarkup = {
@@ -333,6 +346,9 @@ function formatStructurePost(): string {
     "• /setposter KOD — poster qo‘shish/yangilash",
     "• /delposter KOD · /getposter KOD",
     "• /backup — bazaning zaxira nusxasi",
+    "• /version — bot qaysi commit bilan ishlayapti",
+    "• /editparts KOD | FASL (keyingi qatorlarda: QISM | nom)",
+    "• /stats — foydalanuvchilar va kontent statistikasi",
     "• /genre KOD | Janr 1, Janr 2",
     "• /setstart",
     "• /setstructure POST_LINK",
@@ -563,6 +579,9 @@ async function configureBotCommands(): Promise<void> {
     { command: "addpart", description: "Serial qismi qo‘shish" },
     { command: "editpart", description: "Serial qismi nomini tahrirlash" },
     { command: "backup", description: "Bazaning zaxira nusxasini olish" },
+    { command: "version", description: "Bot versiyasi (qaysi commit)" },
+    { command: "editparts", description: "Ko‘p qism nomini bir xabarda tahrirlash" },
+    { command: "stats", description: "Bot statistikasi" },
     { command: "setposter", description: "Serial posterini o‘rnatish" },
     { command: "delposter", description: "Serial posterini o‘chirish" },
     { command: "getposter", description: "Serial posteri holatini ko‘rish" },
@@ -1141,7 +1160,10 @@ async function handleEpisodeNavigationCallback(
   return true;
 }
 
-async function sendDatabaseBackup(chatId: number): Promise<void> {
+async function sendDatabaseBackup(
+  chatId: number,
+  label = "🗄 Baza zaxira nusxasi",
+): Promise<void> {
   const directory = mkdtempSync(path.join(tmpdir(), "medflix-backup-"));
   try {
     const filePath = path.join(directory, "kino-bot.sqlite");
@@ -1155,7 +1177,7 @@ async function sendDatabaseBackup(chatId: number): Promise<void> {
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
     const form = new FormData();
     form.append("chat_id", String(chatId));
-    form.append("caption", `🗄 Baza zaxira nusxasi (${Math.ceil(size / 1024)} KB)`);
+    form.append("caption", `${label} (${Math.ceil(size / 1024)} KB)`);
     form.append(
       "document",
       new Blob([readFileSync(filePath)]),
@@ -1176,6 +1198,37 @@ async function sendDatabaseBackup(chatId: number): Promise<void> {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+/** Har kuni (standart 21:00 UTC = 02:00 Toshkent) barcha adminlarga baza nusxasini yuboradi. */
+function startAutoBackup(): void {
+  if ((process.env.AUTO_BACKUP ?? "").toLowerCase() === "off") {
+    logger.info("Auto backup is disabled (AUTO_BACKUP=off)");
+    return;
+  }
+  const hourUtc = parseBackupHour(process.env.AUTO_BACKUP_HOUR_UTC);
+
+  const tick = async (): Promise<void> => {
+    try {
+      const now = new Date();
+      if (!shouldRunBackup(now, getSetting("last_auto_backup_date"), hourUtc)) {
+        return;
+      }
+      setSetting("last_auto_backup_date", todayKey(now));
+      for (const adminId of getAdminIds()) {
+        const adminChatId = Number(adminId);
+        if (Number.isSafeInteger(adminChatId)) {
+          await sendDatabaseBackup(adminChatId, "🗄 Avto-zaxira");
+        }
+      }
+      logger.info("Daily auto backup sent");
+    } catch (err: unknown) {
+      logger.error({ err }, "Auto backup failed");
+    }
+  };
+
+  setTimeout(() => void tick(), 60_000);
+  setInterval(() => void tick(), 30 * 60_000);
 }
 
 async function saveSeriesPosterFromAdmin(
@@ -1568,7 +1621,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/addseries" ||
         command === "/addpart" ||
         command === "/editpart" ||
+        command === "/editparts" ||
+        command === "/stats" ||
         command === "/backup" ||
+        command === "/version" ||
         command === "/setposter" ||
         command === "/delposter" ||
         command === "/getposter" ||
@@ -1888,6 +1944,19 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       return;
     }
 
+    if (command === "/version") {
+      const versionSeries = listSeries();
+      await sendText(
+        chatId,
+        formatVersionMessage(versionInfo, {
+          movies: listMovies().length,
+          series: versionSeries.length,
+          episodes: versionSeries.reduce((sum, item) => sum + item.episodeCount, 0),
+        }),
+      );
+      return;
+    }
+
     if (command === "/backup") {
       if (chatId !== userId) {
         await sendText(
@@ -1897,6 +1966,44 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         return;
       }
       await sendDatabaseBackup(chatId);
+      return;
+    }
+
+    if (command === "/stats") {
+      await sendText(chatId, formatStatsMessage(getBotStats()));
+      return;
+    }
+
+    if (command === "/editparts") {
+      const parsed = parseEditParts(text.replace(/^\/\S+\s*/, ""));
+      if (!parsed.ok) {
+        await sendText(
+          chatId,
+          [
+            parsed.error,
+            "",
+            "Format (har qism yangi qatorda):",
+            "/editparts 101 | 1",
+            "1 | Birinchi nom",
+            "2 | Ikkinchi nom",
+          ].join("\n"),
+        );
+        return;
+      }
+      if (!findSeries(parsed.code)) {
+        await sendText(chatId, `${parsed.code} seriali topilmadi.`);
+        return;
+      }
+      if (parsed.items.length === 0) {
+        await sendText(chatId, formatEditPartsResult({ ...parsed, updated: [], missing: [] }));
+        return;
+      }
+
+      const result = updateSeriesEpisodeTitles(parsed.code, parsed.season, parsed.items);
+      if (result.updated.length > 0) {
+        await refreshStructurePost();
+      }
+      await sendText(chatId, formatEditPartsResult({ ...parsed, ...result }));
       return;
     }
 
@@ -2244,9 +2351,11 @@ async function poll(): Promise<void> {
         offset = update.update_id + 1;
         setSetting("telegram_update_offset", String(offset));
         if (update.message) {
+          if (update.message.chat.id > 0) touchBotUser(update.message.chat.id);
           await handleMessage(update.message);
         }
         if (update.callback_query) {
+          touchBotUser(update.callback_query.from.id);
           await handleCallbackQuery(update.callback_query);
         }
       }
@@ -2269,5 +2378,6 @@ export async function startTelegramBot(): Promise<void> {
   await configureBotCommands();
   await refreshStructurePost();
   logger.info({ username: bot.username }, "Telegram bot connected");
+  startAutoBackup();
   void poll();
 }

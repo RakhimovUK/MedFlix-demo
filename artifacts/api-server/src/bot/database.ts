@@ -512,6 +512,87 @@ export function createDatabaseBackup(targetPath: string): void {
   database.prepare("VACUUM INTO ?").run(targetPath);
 }
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS bot_users (
+    chat_id INTEGER PRIMARY KEY,
+    first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT OR IGNORE INTO bot_users (chat_id)
+  SELECT DISTINCT chat_id FROM series_progress;
+`);
+
+export function touchBotUser(chatId: number): void {
+  try {
+    database
+      .prepare(
+        `INSERT INTO bot_users (chat_id) VALUES (?)
+         ON CONFLICT(chat_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`,
+      )
+      .run(chatId);
+  } catch {
+    // statistika xatosi botni to'xtatmasligi kerak
+  }
+}
+
+export function getBotStats(): {
+  users: number;
+  activeDay: number;
+  activeWeek: number;
+  newDay: number;
+  movies: number;
+  moviePosts: number;
+  series: number;
+  episodes: number;
+} {
+  const count = (table: string): number =>
+    Number((database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+  const users = database
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(last_seen >= datetime('now', '-1 day')), 0) AS day,
+              COALESCE(SUM(last_seen >= datetime('now', '-7 day')), 0) AS week,
+              COALESCE(SUM(first_seen >= datetime('now', '-1 day')), 0) AS fresh
+       FROM bot_users`,
+    )
+    .get() as Record<string, number>;
+
+  return {
+    users: Number(users.total),
+    activeDay: Number(users.day),
+    activeWeek: Number(users.week),
+    newDay: Number(users.fresh),
+    movies: count("movies"),
+    moviePosts: count("movie_posts"),
+    series: count("series"),
+    episodes: count("series_episodes"),
+  };
+}
+
+export function updateSeriesEpisodeTitles(
+  seriesCode: string,
+  seasonNumber: number,
+  items: Array<{ episode: number; title: string }>,
+): { updated: number[]; missing: number[] } {
+  const updated: number[] = [];
+  const missing: number[] = [];
+  database.exec("BEGIN");
+  try {
+    for (const item of items) {
+      if (updateSeriesEpisodeTitle(seriesCode, seasonNumber, item.episode, item.title)) {
+        updated.push(item.episode);
+      } else {
+        missing.push(item.episode);
+      }
+    }
+    database.exec("COMMIT");
+  } catch (err: unknown) {
+    database.exec("ROLLBACK");
+    throw err;
+  }
+  return { updated, missing };
+}
+
 export function clearSeriesPoster(seriesCode: string): boolean {
   const result = database
     .prepare(
