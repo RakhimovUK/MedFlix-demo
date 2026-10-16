@@ -521,13 +521,19 @@ database.exec(`
   INSERT OR IGNORE INTO bot_users (chat_id)
   SELECT DISTINCT chat_id FROM series_progress;
 `);
+const botUserColumns = database
+  .prepare("PRAGMA table_info(bot_users)")
+  .all() as Array<{ name: string }>;
+if (!botUserColumns.some((column) => column.name === "blocked")) {
+  database.exec("ALTER TABLE bot_users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0");
+}
 
 export function touchBotUser(chatId: number): void {
   try {
     database
       .prepare(
         `INSERT INTO bot_users (chat_id) VALUES (?)
-         ON CONFLICT(chat_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP`,
+         ON CONFLICT(chat_id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP, blocked = 0`,
       )
       .run(chatId);
   } catch {
@@ -567,6 +573,20 @@ export function getBotStats(): {
     series: count("series"),
     episodes: count("series_episodes"),
   };
+}
+
+export function listBroadcastRecipients(): number[] {
+  const rows = database
+    .prepare("SELECT chat_id FROM bot_users WHERE blocked = 0 ORDER BY chat_id")
+    .all() as Array<{ chat_id: number }>;
+  return rows.map((row) => Number(row.chat_id));
+}
+
+export function markBotUserBlocked(chatIds: number[]): void {
+  const statement = database.prepare("UPDATE bot_users SET blocked = 1 WHERE chat_id = ?");
+  for (const chatId of chatIds) {
+    statement.run(chatId);
+  }
 }
 
 export function updateSeriesEpisodeTitles(

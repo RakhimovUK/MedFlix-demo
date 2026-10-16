@@ -34,6 +34,8 @@ import {
   updateSeriesEpisodeTitle,
   updateSeriesEpisodeTitles,
   getBotStats,
+  listBroadcastRecipients,
+  markBotUserBlocked,
   touchBotUser,
   upsertSeriesEpisode,
   upsertMovie,
@@ -64,6 +66,7 @@ import {
   shouldRunBackup,
   todayKey,
 } from "./admin-tools";
+import { runBroadcast } from "./broadcast";
 import { copyContentsPosts } from "./contents-delivery";
 import { logger } from "../lib/logger";
 
@@ -135,6 +138,11 @@ const navCleanup = createNavCleanup(async (chatId, messageId) => {
   await telegramApi("deleteMessage", { chat_id: chatId, message_id: messageId });
 });
 const OUTGOING_METHODS = new Set(["sendMessage", "sendPhoto", "sendVideo", "copyMessage"]);
+const pendingBroadcasts = new Map<
+  string,
+  { sourceChatId: number; sourceMessageId: number; expiresAt: number }
+>();
+let broadcastRunning = false;
 const versionInfo = resolveVersion(process.env, runGit);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
@@ -349,6 +357,7 @@ function formatStructurePost(): string {
     "• /version — bot qaysi commit bilan ishlayapti",
     "• /editparts KOD | FASL (keyingi qatorlarda: QISM | nom)",
     "• /stats — foydalanuvchilar va kontent statistikasi",
+    "• /broadcast — xabarga reply qilib: hammaga yuborish (/broadcast test — sinov)",
     "• /genre KOD | Janr 1, Janr 2",
     "• /setstart",
     "• /setstructure POST_LINK",
@@ -582,6 +591,7 @@ async function configureBotCommands(): Promise<void> {
     { command: "version", description: "Bot versiyasi (qaysi commit)" },
     { command: "editparts", description: "Ko‘p qism nomini bir xabarda tahrirlash" },
     { command: "stats", description: "Bot statistikasi" },
+    { command: "broadcast", description: "Barcha foydalanuvchilarga xabar yuborish" },
     { command: "setposter", description: "Serial posterini o‘rnatish" },
     { command: "delposter", description: "Serial posterini o‘chirish" },
     { command: "getposter", description: "Serial posteri holatini ko‘rish" },
@@ -1160,6 +1170,152 @@ async function handleEpisodeNavigationCallback(
   return true;
 }
 
+async function handleBroadcastCommand(
+  message: TelegramMessage,
+  userId: number,
+  args: string,
+): Promise<void> {
+  const chatId = message.chat.id;
+  if (chatId !== userId) {
+    await sendText(chatId, "Xabar tarqatish faqat botning shaxsiy chatida ishlaydi.");
+    return;
+  }
+
+  const source = message.reply_to_message;
+  if (!source) {
+    await sendText(
+      chatId,
+      [
+        "Xabar tarqatish:",
+        "1. Tarqatmoqchi bo‘lgan xabarni (matn, rasm, video) shu chatga yuboring.",
+        "2. Shu xabarga reply qilib /broadcast yozing.",
+        "",
+        "Avval sinash: reply qilib /broadcast test (faqat o‘zingizga keladi).",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (args.trim().toLowerCase() === "test") {
+    try {
+      await telegramApi("copyMessage", {
+        chat_id: chatId,
+        from_chat_id: source.chat.id,
+        message_id: source.message_id,
+      });
+    } catch (err: unknown) {
+      logger.warn({ err }, "Broadcast test failed");
+      await sendText(chatId, "Test xabarini yuborib bo‘lmadi.");
+    }
+    return;
+  }
+
+  if (broadcastRunning) {
+    await sendText(chatId, "Oldingi tarqatish hali tugamagan. Tugashini kuting.");
+    return;
+  }
+
+  const count = listBroadcastRecipients().length;
+  if (count === 0) {
+    await sendText(chatId, "Hozircha tarqatiladigan foydalanuvchi yo‘q.");
+    return;
+  }
+
+  pendingBroadcasts.set(String(userId), {
+    sourceChatId: source.chat.id,
+    sourceMessageId: source.message_id,
+    expiresAt: Date.now() + 10 * 60_000,
+  });
+  await sendText(chatId, `📣 Xabar ${count} ta foydalanuvchiga yuboriladi.\nDavom etasizmi?`, {
+    inline_keyboard: [
+      [
+        { text: "✅ Yuborish", callback_data: "bc:go" },
+        { text: "❌ Bekor qilish", callback_data: "bc:no" },
+      ],
+    ],
+  });
+}
+
+async function handleBroadcastCallback(
+  callbackQuery: TelegramCallbackQuery,
+  message: TelegramMessage,
+): Promise<void> {
+  const userId = callbackQuery.from.id;
+  if (!isAdmin(userId)) {
+    await answerCallbackQuery(callbackQuery.id, "Bu amal faqat admin uchun.");
+    return;
+  }
+
+  const pending = pendingBroadcasts.get(String(userId));
+  pendingBroadcasts.delete(String(userId));
+  try {
+    await telegramApi("editMessageReplyMarkup", {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      reply_markup: { inline_keyboard: [] },
+    });
+  } catch {
+    // tugmalarni olib tashlab bo'lmasa ham davom etamiz
+  }
+
+  if (callbackQuery.data === "bc:no") {
+    await answerCallbackQuery(callbackQuery.id, "Bekor qilindi.");
+    return;
+  }
+  if (!pending || pending.expiresAt < Date.now()) {
+    await answerCallbackQuery(callbackQuery.id, "Muddati tugagan. /broadcast ni qayta yuboring.");
+    return;
+  }
+  if (broadcastRunning) {
+    await answerCallbackQuery(callbackQuery.id, "Oldingi tarqatish hali tugamagan.");
+    return;
+  }
+
+  await answerCallbackQuery(callbackQuery.id, "Yuborish boshlandi.");
+  void runBroadcastJob(message.chat.id, pending);
+}
+
+async function runBroadcastJob(
+  adminChatId: number,
+  pending: { sourceChatId: number; sourceMessageId: number },
+): Promise<void> {
+  broadcastRunning = true;
+  try {
+    const result = await runBroadcast({
+      recipients: listBroadcastRecipients(),
+      send: async (recipientId) => {
+        await telegramApi("copyMessage", {
+          chat_id: recipientId,
+          from_chat_id: pending.sourceChatId,
+          message_id: pending.sourceMessageId,
+        });
+      },
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    });
+    markBotUserBlocked(result.blockedIds);
+    logger.info({ ...result, blockedIds: undefined }, "Broadcast finished");
+    await sendText(
+      adminChatId,
+      [
+        "✅ Tarqatish tugadi",
+        `• Yuborildi: ${result.sent}`,
+        `• Botni bloklagan: ${result.blocked}`,
+        `• Xato: ${result.failed}`,
+        `• Jami: ${result.total}`,
+      ].join("\n"),
+    );
+  } catch (err: unknown) {
+    logger.error({ err }, "Broadcast failed");
+    try {
+      await sendText(adminChatId, "Tarqatish vaqtida xato yuz berdi. Loglarni tekshiring.");
+    } catch {
+      // admin bilan aloqa yo'q bo'lsa, log yetarli
+    }
+  } finally {
+    broadcastRunning = false;
+  }
+}
+
 async function sendDatabaseBackup(
   chatId: number,
   label = "🗄 Baza zaxira nusxasi",
@@ -1298,6 +1454,11 @@ async function handleCallbackQueryInner(
   const chatId = message.chat.id;
   const userId = callbackQuery.from.id;
   const data = callbackQuery.data ?? "";
+
+  if (data.startsWith("bc:")) {
+    await handleBroadcastCallback(callbackQuery, message);
+    return;
+  }
 
   if (data === "subscription:check") {
     subscriptionCache.delete(userId);
@@ -1623,6 +1784,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/editpart" ||
         command === "/editparts" ||
         command === "/stats" ||
+        command === "/broadcast" ||
         command === "/backup" ||
         command === "/version" ||
         command === "/setposter" ||
@@ -1966,6 +2128,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         return;
       }
       await sendDatabaseBackup(chatId);
+      return;
+    }
+
+    if (command === "/broadcast") {
+      await handleBroadcastCommand(message, userId, args);
       return;
     }
 
