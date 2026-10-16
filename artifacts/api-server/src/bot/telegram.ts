@@ -80,6 +80,7 @@ import {
   type InlineKeyboardButton,
   type ReplyMarkup,
 } from "./keyboards";
+import { createTelegramApi, type TelegramResponse } from "./telegram-api";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -93,12 +94,6 @@ import { runBroadcast } from "./broadcast";
 import { createKeyedQueue } from "./keyed-queue";
 import { copyContentsPosts } from "./contents-delivery";
 import { logger } from "../lib/logger";
-
-type TelegramResponse<T> = {
-  ok: boolean;
-  result: T;
-  description?: string;
-};
 
 type TelegramUser = {
   id: number;
@@ -155,7 +150,10 @@ const pendingPosterRequests = new Map<string, { code: string; expiresAt: number 
 const navCleanup = createNavCleanup(async (chatId, messageId) => {
   await telegramApi("deleteMessage", { chat_id: chatId, message_id: messageId });
 });
-const OUTGOING_METHODS = new Set(["sendMessage", "sendPhoto", "sendVideo", "copyMessage"]);
+const { apiUrl, telegramApi, sendText, answerCallbackQuery } = createTelegramApi({
+  token,
+  onOutgoing: (chatId) => navCleanup.noteSent(chatId),
+});
 const pendingBroadcasts = new Map<
   string,
   { sourceChatId: number; sourceMessageId: number; expiresAt: number }
@@ -168,44 +166,6 @@ const updateQueue = createKeyedQueue({
 });
 const versionInfo = resolveVersion(process.env, runGit);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
-
-function apiUrl(method: string): string {
-  return `https://api.telegram.org/bot${token}/${method}`;
-}
-
-async function telegramApi<T>(
-  method: string,
-  body: Record<string, unknown>,
-): Promise<T> {
-  const response = await fetch(apiUrl(method), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  const payload = (await response.json()) as TelegramResponse<T>;
-  if (!response.ok || !payload.ok) {
-    throw new Error(payload.description ?? `Telegram API error: ${response.status}`);
-  }
-
-  if (OUTGOING_METHODS.has(method) && typeof body.chat_id === "number") {
-    navCleanup.noteSent(body.chat_id);
-  }
-
-  return payload.result;
-}
-
-async function sendText(
-  chatId: number,
-  text: string,
-  replyMarkup?: ReplyMarkup,
-): Promise<void> {
-  await telegramApi("sendMessage", {
-    chat_id: chatId,
-    text,
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-  });
-}
 
 /** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
 function readPostLinksFromEnv(name: string): TelegramPostReference[] {
@@ -1349,16 +1309,6 @@ async function savePosterFromAdmin(
         : "📝 Tavsif: matn yo'q (kanal postini forward qilsangiz matn ham olinadi)",
     ].join("\n"),
   );
-}
-
-async function answerCallbackQuery(
-  callbackQueryId: string,
-  text?: string,
-): Promise<void> {
-  await telegramApi("answerCallbackQuery", {
-    callback_query_id: callbackQueryId,
-    ...(text ? { text } : {}),
-  });
 }
 
 async function handleCallbackQuery(
