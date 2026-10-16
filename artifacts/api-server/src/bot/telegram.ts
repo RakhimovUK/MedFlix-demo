@@ -61,6 +61,25 @@ import {
   parseTelegramPostLink,
   type TelegramPostReference,
 } from "./catalog-content";
+import {
+  getAdminIds,
+  getDiscussionUrl,
+  getPostsChannelId,
+  getRequiredSubscriptions,
+  isAdmin,
+} from "./config";
+import {
+  buildCatalogKeyboard,
+  buildGenreKeyboard,
+  buildStartKeyboard,
+  buildSubscriptionKeyboard,
+  decodeCallbackValue,
+  encodeCallbackValue,
+  movieKeyboard,
+  seriesKeyboard,
+  type InlineKeyboardButton,
+  type ReplyMarkup,
+} from "./keyboards";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -112,12 +131,6 @@ type TelegramMessage = {
   reply_to_message?: TelegramMessage;
 };
 
-type InlineKeyboardButton = {
-  text: string;
-  callback_data?: string;
-  url?: string;
-};
-
 type TelegramCallbackQuery = {
   id: string;
   from: TelegramUser;
@@ -155,16 +168,6 @@ const updateQueue = createKeyedQueue({
 });
 const versionInfo = resolveVersion(process.env, runGit);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
-
-type ReplyMarkup = {
-  inline_keyboard: InlineKeyboardButton[][];
-};
-
-type RequiredSubscription = {
-  chatId: string;
-  label: string;
-  url?: string;
-};
 
 function apiUrl(method: string): string {
   return `https://api.telegram.org/bot${token}/${method}`;
@@ -204,61 +207,6 @@ async function sendText(
   });
 }
 
-function isAdmin(userId: number): boolean {
-  return new Set(getAdminIds()).has(String(userId));
-}
-
-function getAdminIds(): string[] {
-  return (process.env.TELEGRAM_ADMIN_IDS ?? "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
-}
-
-function getCsvEnv(name: string): string[] {
-  return (process.env[name] ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-function getRequiredSubscriptions(): RequiredSubscription[] {
-  const channelIds = getCsvEnv("TELEGRAM_REQUIRED_CHANNEL_IDS");
-  const channelUrls = getCsvEnv("TELEGRAM_REQUIRED_CHANNEL_URLS");
-  const chatIds = getCsvEnv("TELEGRAM_REQUIRED_CHAT_IDS");
-  const chatUrls = getCsvEnv("TELEGRAM_REQUIRED_CHAT_URLS");
-
-  return [
-    ...channelIds.map((chatId, index) => ({
-      chatId,
-      label: "Asosiy kanalga obuna bo‘lish",
-      url: channelUrls[index],
-    })),
-    ...chatIds.map((chatId, index) => ({
-      chatId,
-      label: "Muhokama chatiga qo‘shilish",
-      url: chatUrls[index],
-    })),
-  ];
-}
-
-function encodeCallbackValue(value: string): string {
-  return Buffer.from(value, "utf8").toString("base64url");
-}
-
-function decodeCallbackValue(value: string): string | null {
-  try {
-    return Buffer.from(value, "base64url").toString("utf8");
-  } catch {
-    return null;
-  }
-}
-
-function getDiscussionUrl(): string | undefined {
-  const value = process.env.TELEGRAM_DISCUSSION_URL?.trim();
-  return value || undefined;
-}
-
 /** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
 function readPostLinksFromEnv(name: string): TelegramPostReference[] {
   const raw = process.env[name]?.trim();
@@ -273,7 +221,7 @@ function readPostLinksFromEnv(name: string): TelegramPostReference[] {
 const defaultStructurePost: TelegramPostReference = readPostLinksFromEnv(
   "STRUCTURE_POST_LINK",
 )[0] ?? {
-  chatId: "-1004418309907",
+  chatId: getPostsChannelId(),
   messageId: 17,
 };
 
@@ -282,7 +230,7 @@ const defaultContentsPosts: TelegramPostReference[] =
   envContentsPosts.length > 0
     ? envContentsPosts
     : [22, 23, 24, 25, 26].map((messageId) => ({
-        chatId: "-1004418309907",
+        chatId: getPostsChannelId(),
         messageId,
       }));
 
@@ -503,17 +451,7 @@ async function updateStructurePost(): Promise<boolean> {
 }
 
 function getSubscriptionKeyboard(): ReplyMarkup {
-  const buttons: InlineKeyboardButton[] = getRequiredSubscriptions().map(
-    (subscription) => ({
-      text: subscription.label,
-      ...(subscription.url ? { url: subscription.url } : {}),
-    }),
-  );
-
-  buttons.push({ text: "✅ Tekshirish", callback_data: "subscription:check" });
-  return {
-    inline_keyboard: buttons.map((button) => [button]),
-  };
+  return buildSubscriptionKeyboard(getRequiredSubscriptions());
 }
 
 async function isSubscribed(userId: number): Promise<boolean> {
@@ -584,17 +522,7 @@ async function requireSubscription(
 }
 
 function getStartKeyboard(): ReplyMarkup {
-  const rows: InlineKeyboardButton[][] = [
-    [
-      { text: "🎬 Katalog", callback_data: "catalog" },
-      { text: "🔍 Qidirish", callback_data: "search:help" },
-    ],
-  ];
-  const discussionUrl = getDiscussionUrl();
-  if (discussionUrl) {
-    rows.push([{ text: "💬 Muhokama chati", url: discussionUrl }]);
-  }
-  return { inline_keyboard: rows };
+  return buildStartKeyboard(getDiscussionUrl());
 }
 
 async function configureBotCommands(): Promise<void> {
@@ -683,63 +611,15 @@ function formatMovieList(): string {
   ].join("\n");
 }
 
-function movieKeyboard(movies: ReturnType<typeof listMovies>): ReplyMarkup | undefined {
-  if (movies.length === 0) {
-    return undefined;
-  }
-
-  return {
-    inline_keyboard: movies.slice(0, 25).map((movie) => [
-      {
-        text: `${movie.code} — ${movie.title}`.slice(0, 64),
-        callback_data: `movie:${encodeCallbackValue(movie.code)}`,
-      },
-    ]),
-  };
-}
-
-function seriesKeyboard(series: ReturnType<typeof listSeries>): ReplyMarkup | undefined {
-  if (series.length === 0) {
-    return undefined;
-  }
-
-  return {
-    inline_keyboard: series.slice(0, 25).map((item) => [
-      {
-        text: `📺 ${item.code} — ${item.title} (${item.seasonCount} fasl, ${item.episodeCount} qism)`.slice(0, 64),
-        callback_data: `series:${encodeCallbackValue(item.code)}`,
-      },
-    ]),
-  };
-}
-
 function genreKeyboard(): ReplyMarkup | undefined {
-  const genres = listGenres();
-  if (genres.length === 0) {
-    return undefined;
-  }
-
-  return {
-    inline_keyboard: genres.slice(0, 20).map((genre) => [
-      {
-        text: `${genre.name} (${genre.movieCount})`.slice(0, 64),
-        callback_data: `genre:${encodeCallbackValue(genre.name)}`,
-      },
-    ]),
-  };
+  return buildGenreKeyboard(listGenres());
 }
 
 function catalogKeyboard(
   movies: ReturnType<typeof listMovies>,
   series: ReturnType<typeof listSeries>,
 ): ReplyMarkup | undefined {
-  const rows = [
-    ...(genreKeyboard()?.inline_keyboard ?? []),
-    ...(movieKeyboard(movies)?.inline_keyboard ?? []),
-    ...(seriesKeyboard(series)?.inline_keyboard ?? []),
-  ];
-
-  return rows.length > 0 ? { inline_keyboard: rows } : undefined;
+  return buildCatalogKeyboard(listGenres(), movies, series);
 }
 
 /** "Katalog" tugmasi: baza kanaldagi Mundarija postlarini (contents_posts) nusxalab yuboradi. */
@@ -1899,7 +1779,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           [
             "Format: /setstructure POST_LINK",
             `Joriy struktura posti: ${formatTelegramPostLink(currentReference)}`,
-            "Masalan: /setstructure https://t.me/c/4418309907/17",
+            "Masalan: /setstructure https://t.me/c/KANAL_ID/17",
             "",
             "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
           ].join("\n"),
@@ -1936,7 +1816,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
                 `${index + 1}. ${formatTelegramPostLink(reference)}`,
             ),
             "",
-            "Masalan: /setcontents https://t.me/c/4418309907/22 https://t.me/c/4418309907/23",
+            "Masalan: /setcontents https://t.me/c/KANAL_ID/22 https://t.me/c/KANAL_ID/23",
             "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
           ].join("\n"),
         );

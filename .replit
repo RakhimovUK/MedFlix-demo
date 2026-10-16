@@ -28,3 +28,6 @@ channel = "stable-25_05"
 
 [userenv.shared]
 TELEGRAM_ADMIN_IDS = "1733531423"
+
+[[ports]]
+localPort = 8080
