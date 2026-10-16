@@ -1480,6 +1480,732 @@ async function handleCallbackQueryInner(
   }
 }
 
+type CommandContext = {
+  chatId: number;
+  userId: number;
+  message: TelegramMessage;
+  text: string;
+  command: string;
+  args: string;
+};
+
+async function handleIdCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  await sendText(
+    chatId,
+    [
+      `Sizning Telegram ID raqamingiz: ${userId}`,
+      `Admin holati: ${isAdmin(userId) ? "tasdiqlangan" : "tasdiqlanmagan"}`,
+    ].join("\n"),
+  );
+  return;
+}
+
+async function handleCatalogCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  await sendContents(chatId);
+  return;
+}
+
+async function handleSearchCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  if (!args) {
+    await sendText(
+      chatId,
+      "Qidirish uchun kino kodini yoki nomini yuboring. Masalan: /search Interstellar",
+    );
+    return;
+  }
+
+  const exactSeries = findSeries(normalizeCode(args));
+  if (exactSeries) {
+    await sendSeriesEpisodes(chatId, exactSeries.code);
+    return;
+  }
+
+  const exactMovie = findMovie(normalizeCode(args));
+  if (exactMovie) {
+    await deliverMovie(chatId, exactMovie);
+    return;
+  }
+
+  const seriesMatches = searchSeries(args);
+  if (seriesMatches.length > 0) {
+    await sendSeriesResults(
+      chatId,
+      seriesMatches,
+      `«${args}» bo‘yicha seriallar:`,
+    );
+  }
+
+  await sendMovieResults(
+    chatId,
+    searchMovies(args),
+    `«${args}» bo‘yicha qidiruv natijalari:`,
+  );
+  return;
+}
+
+async function handleSetstartCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const startVideo =
+    getForwardedChannelPost(message.reply_to_message ?? message) ??
+    pendingForwardedPosts.get(String(userId));
+
+  if (!startVideo) {
+    await sendText(
+      chatId,
+      [
+        "Start videosini o‘rnatish uchun:",
+        "1. Kanal video postini shu botga forward qiling.",
+        "2. /setstart yuboring.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  setSetting("start_channel_chat_id", startVideo.channelChatId);
+  setSetting(
+    "start_channel_message_id",
+    String(startVideo.channelMessageId),
+  );
+  pendingForwardedPosts.delete(String(userId));
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    "Start videosi saqlandi. Endi foydalanuvchi /start yuborganda shu video chiqadi.",
+  );
+  return;
+}
+
+async function handleSetstructureCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const reference = parseTelegramPostLink(args);
+  if (!reference) {
+    const currentReference = getStructurePostReference();
+    await sendText(
+      chatId,
+      [
+        "Format: /setstructure POST_LINK",
+        `Joriy struktura posti: ${formatTelegramPostLink(currentReference)}`,
+        "Masalan: /setstructure https://t.me/c/KANAL_ID/17",
+        "",
+        "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  setSetting("structure_post_chat_id", reference.chatId);
+  setSetting("structure_post_message_id", String(reference.messageId));
+  const updated = await refreshStructurePost();
+  await sendText(
+    chatId,
+    updated
+      ? `Struktura posti sozlandi va yangilandi: ${reference.chatId}/${reference.messageId}`
+      : "Post manzili saqlandi, lekin hozircha tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
+  );
+  return;
+}
+
+async function handleSetcontentsCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const tokens = args.split(/[\s,]+/).filter(Boolean);
+  const references = tokens.map((token) => parseTelegramPostLink(token));
+  const valid =
+    tokens.length > 0 && references.every((reference) => reference !== null);
+
+  if (!valid) {
+    await sendText(
+      chatId,
+      [
+        "Format: /setcontents LINK1 LINK2 LINK3 ...",
+        "Joriy mundarija postlari:",
+        ...getContentsPostReferences().map(
+          (reference, index) =>
+            `${index + 1}. ${formatTelegramPostLink(reference)}`,
+        ),
+        "",
+        "Masalan: /setcontents https://t.me/c/KANAL_ID/22 https://t.me/c/KANAL_ID/23",
+        "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const list = references as TelegramPostReference[];
+  setSetting("contents_posts", JSON.stringify(list));
+  contentsCache.clear();
+  await updateStructurePost();
+  const updated = await refreshContentsPost();
+  await sendText(
+    chatId,
+    updated
+      ? `Mundarija postlari sozlandi (${list.length} ta) va yangilandi.`
+      : "Postlar manzili saqlandi, lekin ba‘zilarini tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
+  );
+  return;
+}
+
+async function handleAddseriesCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const [rawCode, rawTitle] = args
+    .split("|")
+    .map((value) => value.trim());
+  const code = normalizeCode(rawCode ?? "");
+  const title = rawTitle ?? "";
+
+  if (!code || !title) {
+    await sendText(
+      chatId,
+      [
+        "Format: /addseries KOD | Serial nomi",
+        "Masalan: /addseries DH | Dr. House",
+        "Bu format serial va bir nechta postli kinolar uchun ham ishlaydi.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (findMovie(code)) {
+    await sendText(
+      chatId,
+      `${code} kodi oddiy kino sifatida mavjud. Serial uchun boshqa kod tanlang.`,
+    );
+    return;
+  }
+
+  const series = upsertSeries({ code, title });
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    `${series.code} — ${series.title} seriali yaratildi. Endi postlarni forward qilib /addpart yuboring.`,
+  );
+  return;
+}
+
+async function handleAddpartCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const partArgs = args.split("|").map((value) => value.trim());
+  const [rawCode, rawSeasonOrEpisode, rawEpisodeOrTitle, rawPartTitle] =
+    partArgs;
+  const code = normalizeCode(rawCode ?? "");
+  const hasSeason = partArgs.length >= 4;
+  const seasonNumber = Number(hasSeason ? rawSeasonOrEpisode : 1);
+  const episodeNumber = Number(
+    hasSeason ? rawEpisodeOrTitle : rawSeasonOrEpisode,
+  );
+  const title = hasSeason ? rawPartTitle ?? "" : rawEpisodeOrTitle ?? "";
+  const referencedForward =
+    getForwardedChannelPost(message.reply_to_message ?? message) ??
+    pendingForwardedPosts.get(String(userId));
+
+  if (
+    !code ||
+    !Number.isInteger(seasonNumber) ||
+    seasonNumber <= 0 ||
+    !Number.isInteger(episodeNumber) ||
+    episodeNumber <= 0 ||
+    !referencedForward
+  ) {
+    await sendText(
+      chatId,
+      [
+        "Yangi format: /addpart SERIAL_KOD | FASL | QISM | Qism nomi",
+        "Eski format: /addpart SERIAL_KOD | QISM | Qism nomi (1-fasl)",
+        "1. Serial yarating: /addseries DH | Dr. House",
+        "2. Kanal postini botga forward qiling.",
+        "3. /addpart DH | 1 | 1 | 1-qism",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (!findSeries(code)) {
+    await sendText(
+      chatId,
+      `${code} seriali topilmadi. Avval /addseries ${code} | Serial nomi yuboring.`,
+    );
+    return;
+  }
+
+  const episode = upsertSeriesEpisode({
+    seriesCode: code,
+    seasonNumber,
+    episodeNumber,
+    title,
+    channelChatId: referencedForward.channelChatId,
+    channelMessageId: referencedForward.channelMessageId,
+  });
+  if (!episode) {
+    await sendText(chatId, "Serial qismini saqlab bo‘lmadi.");
+    return;
+  }
+
+  pendingForwardedPosts.delete(String(userId));
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    `${code} serialining ${seasonNumber}-fasl ${episodeNumber}-qismi bazaga saqlandi.`,
+  );
+  return;
+}
+
+async function handleSetposterCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const code = normalizeCode(args);
+  const photos = message.photo ?? message.reply_to_message?.photo;
+  const fileId =
+    photos && photos.length > 0 ? photos[photos.length - 1]!.file_id : null;
+
+  if (!code) {
+    await sendText(
+      chatId,
+      [
+        "Format: /setposter KOD, so‘ng rasm yuboring.",
+        "Yoki rasm captioniga /setposter KOD yozing (yoki rasmga reply qiling).",
+        "Kino yoki serial kodi bo‘lishi mumkin — bot o‘zi aniqlaydi.",
+        "Masalan: /setposter 101",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (fileId) {
+    pendingPosterRequests.delete(String(userId));
+    await savePosterFromAdmin(
+      chatId,
+      code,
+      fileId,
+      message.photo ? undefined : message.reply_to_message?.caption,
+    );
+    return;
+  }
+
+  if (!findSeries(code) && !findMovie(code)) {
+    await sendText(chatId, `${code} kod bo'yicha kino yoki serial topilmadi.`);
+    return;
+  }
+
+  pendingPosterRequests.set(String(userId), {
+    code,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+  await sendText(
+    chatId,
+    `📸 ${code} uchun baza kanaldagi poster postini (rasm + matn) forward qiling yoki oddiy rasm yuboring.`,
+  );
+  return;
+}
+
+async function handlePosterCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const code = normalizeCode(args);
+  const series = code ? findSeries(code) : null;
+  if (!series) {
+    await sendText(
+      chatId,
+      code && findMovie(code)
+        ? `${code} oddiy kino kodi, serial emas.`
+        : `Format: ${command} SERIAL_KOD (serial topilmadi yoki kod yozilmagan).`,
+    );
+    return;
+  }
+
+  if (command === "/delposter") {
+    const removed = clearSeriesPoster(series.code);
+    await sendText(
+      chatId,
+      removed
+        ? `🗑 Poster o‘chirildi.\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}`
+        : `${series.title} (${series.code}) uchun poster biriktirilmagan.`,
+    );
+    return;
+  }
+
+  const poster = getSeriesPoster(series.code);
+  if (!poster) {
+    await sendText(
+      chatId,
+      `❌ ${series.title} (${series.code}) uchun poster biriktirilmagan.`,
+    );
+    return;
+  }
+  try {
+    await telegramApi("sendPhoto", {
+      chat_id: chatId,
+      photo: poster,
+      caption: `✅ Poster biriktirilgan\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}\n📝 Tavsif: ${getSeriesPosterCaption(series.code) ? "bor" : "yo'q"}`,
+    });
+  } catch (err: unknown) {
+    logger.warn({ err, code: series.code }, "Failed to preview series poster");
+    await sendText(
+      chatId,
+      `Poster biriktirilgan, lekin rasmni ko‘rsatib bo‘lmadi (file_id yaroqsiz bo‘lishi mumkin). /setposter ${series.code} bilan yangilang.`,
+    );
+  }
+  return;
+}
+
+async function handleVersionCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const versionSeries = listSeries();
+  await sendText(
+    chatId,
+    formatVersionMessage(versionInfo, {
+      movies: listMovies().length,
+      series: versionSeries.length,
+      episodes: versionSeries.reduce((sum, item) => sum + item.episodeCount, 0),
+    }),
+  );
+  return;
+}
+
+async function handleBackupCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  if (chatId !== userId) {
+    await sendText(
+      chatId,
+      "Zaxira nusxasi faqat botning shaxsiy chatida yuboriladi.",
+    );
+    return;
+  }
+  await sendDatabaseBackup(chatId);
+  return;
+}
+
+async function handleStatsCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  await sendText(chatId, formatStatsMessage(getBotStats()));
+  return;
+}
+
+async function handleEditpartsCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const parsed = parseEditParts(text.replace(/^\/\S+\s*/, ""));
+  if (!parsed.ok) {
+    await sendText(
+      chatId,
+      [
+        parsed.error,
+        "",
+        "Format (har qism yangi qatorda):",
+        "/editparts 101 | 1",
+        "1 | Birinchi nom",
+        "2 | Ikkinchi nom",
+      ].join("\n"),
+    );
+    return;
+  }
+  if (!findSeries(parsed.code)) {
+    await sendText(chatId, `${parsed.code} seriali topilmadi.`);
+    return;
+  }
+  if (parsed.items.length === 0) {
+    await sendText(chatId, formatEditPartsResult({ ...parsed, updated: [], missing: [] }));
+    return;
+  }
+
+  const result = updateSeriesEpisodeTitles(parsed.code, parsed.season, parsed.items);
+  if (result.updated.length > 0) {
+    await refreshStructurePost();
+  }
+  await sendText(chatId, formatEditPartsResult({ ...parsed, ...result }));
+  return;
+}
+
+async function handleEditpartCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const editArgs = args.split("|").map((value) => value.trim());
+  const hasSeason = editArgs.length >= 4;
+  const code = normalizeCode(editArgs[0] ?? "");
+  const seasonNumber = Number(hasSeason ? editArgs[1] : 1);
+  const episodeNumber = Number(hasSeason ? editArgs[2] : editArgs[1]);
+  const title = (hasSeason ? editArgs.slice(3) : editArgs.slice(2))
+    .join(" | ")
+    .trim();
+
+  if (
+    !code ||
+    !Number.isInteger(seasonNumber) ||
+    seasonNumber <= 0 ||
+    !Number.isInteger(episodeNumber) ||
+    episodeNumber <= 0 ||
+    !title ||
+    title.length > 100
+  ) {
+    await sendText(
+      chatId,
+      [
+        "Format: /editpart SERIAL_KOD | FASL | QISM | Yangi nom",
+        "Qisqa format (1-fasl): /editpart SERIAL_KOD | QISM | Yangi nom",
+        "Masalan: /editpart 101 | 1 | 3 | Uchinchi soat",
+        "Nom bo‘sh bo‘lmasligi va 100 belgidan oshmasligi kerak.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const existing = findSeriesEpisode(code, seasonNumber, episodeNumber);
+  if (!existing) {
+    await sendText(
+      chatId,
+      `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi topilmadi.`,
+    );
+    return;
+  }
+
+  updateSeriesEpisodeTitle(code, seasonNumber, episodeNumber, title);
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    [
+      `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi yangilandi.`,
+      `Eski nom: ${existing.title || "—"}`,
+      `Yangi nom: ${title}`,
+    ].join("\n"),
+  );
+  return;
+}
+
+async function handleListCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  await sendText(chatId, formatMovieList());
+  return;
+}
+
+async function handleGenreCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const [rawCode, rawGenres] = args
+    .split("|")
+    .map((value) => value.trim());
+  const code = normalizeCode(rawCode ?? "");
+  const genres = (rawGenres ?? "")
+    .split(",")
+    .map((genre) => genre.trim())
+    .filter(Boolean);
+
+  if (!code || genres.length === 0) {
+    await sendText(
+      chatId,
+      [
+        "Format: /genre KOD | Janr 1, Janr 2",
+        "Masalan: /genre 101 | Tibbiy drama, Serial",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (!setMovieGenres(code, genres)) {
+    await sendText(chatId, `${code} kodi topilmadi.`);
+    return;
+  }
+
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    `${code} kodi uchun janrlar saqlandi: ${genres.join(", ")}`,
+  );
+  return;
+}
+
+async function handleDeleteCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const code = normalizeCode(args);
+  if (!code) {
+    await sendText(chatId, "Format: /delete KOD");
+    return;
+  }
+
+  const deleted = deleteMovie(code);
+  if (deleted) {
+    await refreshStructurePost();
+  }
+  await sendText(
+    chatId,
+    deleted
+      ? `${code} kodi o‘chirildi.`
+      : `${code} kodi topilmadi.`,
+  );
+  return;
+}
+
+async function handleDeletepartCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const [rawCode, rawSeason, rawEpisode] = args
+    .split("|")
+    .map((value) => value.trim());
+  const code = normalizeCode(rawCode ?? "");
+  const seasonNumber = Number(rawSeason);
+  const episodeNumber = Number(rawEpisode);
+
+  if (
+    !code ||
+    !Number.isInteger(seasonNumber) ||
+    seasonNumber <= 0 ||
+    !Number.isInteger(episodeNumber) ||
+    episodeNumber <= 0
+  ) {
+    await sendText(
+      chatId,
+      [
+        "Format: /deletepart SERIAL_KOD | FASL | QISM",
+        "Masalan: /deletepart DH | 1 | 3",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const deleted = deleteSeriesEpisode(code, seasonNumber, episodeNumber);
+  if (deleted) {
+    await refreshStructurePost();
+  }
+  await sendText(
+    chatId,
+    deleted
+      ? `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi o‘chirildi.`
+      : `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi topilmadi.`,
+  );
+  return;
+}
+
+async function handleDeleteseriesCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const code = normalizeCode(args);
+  if (!code) {
+    await sendText(chatId, "Format: /deleteseries SERIAL_KOD");
+    return;
+  }
+
+  const deleted = deleteSeries(code);
+  if (deleted) {
+    await refreshStructurePost();
+  }
+  await sendText(
+    chatId,
+    deleted
+      ? `${code} seriali va uning barcha qismlari o‘chirildi.`
+      : `${code} seriali topilmadi.`,
+  );
+  return;
+}
+
+async function handleAddCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const [rawCode, rawTitle, rawChatId, rawMessageId] = args
+    .split("|")
+    .map((value) => value.trim());
+  const code = normalizeCode(rawCode ?? "");
+  const title = rawTitle ?? "";
+
+  if (code && findSeries(code)) {
+    await sendText(
+      chatId,
+      `${code} kodi serial sifatida band. Avval /deleteseries ${code} yuboring yoki boshqa kod tanlang.`,
+    );
+    return;
+  }
+  const referencedForward =
+    getForwardedChannelPost(message.reply_to_message ?? message) ??
+    pendingForwardedPosts.get(String(userId));
+  const channelChatId = rawChatId || referencedForward?.channelChatId || "";
+  const channelMessageId =
+    Number(rawMessageId) || referencedForward?.channelMessageId || 0;
+
+  if (
+    !code ||
+    !title ||
+    !channelChatId ||
+    !Number.isInteger(channelMessageId) ||
+    channelMessageId <= 0 ||
+    (rawChatId && !rawMessageId)
+  ) {
+    await sendText(
+      chatId,
+      [
+        "Format noto‘g‘ri.",
+        "Tavsiya etilgan usul:",
+        "1. Kanal postini botga forward qiling.",
+        "2. /add 101 | Interstellar",
+        "",
+        "Eski usul:",
+        "/add 101 | Interstellar | -1001234567890 | 42",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const movie = upsertMovie({
+    code,
+    title,
+    channelChatId,
+    channelMessageId,
+  });
+  pendingForwardedPosts.delete(String(userId));
+  await refreshStructurePost();
+  await sendText(chatId, `${movie.code} — ${movie.title} bazaga saqlandi.`);
+  return;
+}
+
+async function handleAddpostCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, text, command, args } = ctx;
+  const [rawCode, rawPostNumber, rawTitle] = args
+    .split("|")
+    .map((value) => value.trim());
+  const code = normalizeCode(rawCode ?? "");
+  const postNumber = Number(rawPostNumber);
+  const title = rawTitle ?? "";
+  const referencedForward =
+    getForwardedChannelPost(message.reply_to_message ?? message) ??
+    pendingForwardedPosts.get(String(userId));
+
+  if (
+    !code ||
+    !Number.isInteger(postNumber) ||
+    postNumber <= 1 ||
+    !referencedForward
+  ) {
+    await sendText(
+      chatId,
+      [
+        "Format: /addpost KOD | TARTIB | Izoh",
+        "Avval 1-postni /add bilan saqlang.",
+        "Keyin kanal postini forward qilib yuboring.",
+        "Masalan: /addpost 101 | 2 | Kino fayli",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  if (!findMovie(code)) {
+    await sendText(
+      chatId,
+      `${code} kodi topilmadi. Avval poster yoki birinchi postni /add orqali saqlang.`,
+    );
+    return;
+  }
+
+  const post = upsertMoviePost({
+    movieCode: code,
+    postNumber,
+    title,
+    channelChatId: referencedForward.channelChatId,
+    channelMessageId: referencedForward.channelMessageId,
+  });
+  if (!post) {
+    await sendText(chatId, "Kino postini saqlab bo‘lmadi.");
+    return;
+  }
+
+  pendingForwardedPosts.delete(String(userId));
+  await refreshStructurePost();
+  await sendText(
+    chatId,
+    `${code} kodi uchun ${postNumber}-post saqlandi. Kod yuborilganda barcha postlar tartib bilan yuboriladi.`,
+  );
+  return;
+}
+
 async function handleMessage(message: TelegramMessage): Promise<void> {
   const chatId = message.chat.id;
   const userId = message.from?.id;
@@ -1543,6 +2269,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
   if (text.startsWith("/")) {
     const { command, args } = commandParts(text);
+    const ctx: CommandContext = { chatId, userId, message, text, command, args };
 
     if (command === "/start" && args) {
       const payloadCode = normalizeCode(args);
@@ -1604,56 +2331,17 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
 
     if (command === "/id") {
-      await sendText(
-        chatId,
-        [
-          `Sizning Telegram ID raqamingiz: ${userId}`,
-          `Admin holati: ${isAdmin(userId) ? "tasdiqlangan" : "tasdiqlanmagan"}`,
-        ].join("\n"),
-      );
+      await handleIdCommand(ctx);
       return;
     }
 
     if (command === "/catalog") {
-      await sendContents(chatId);
+      await handleCatalogCommand(ctx);
       return;
     }
 
     if (command === "/search") {
-      if (!args) {
-        await sendText(
-          chatId,
-          "Qidirish uchun kino kodini yoki nomini yuboring. Masalan: /search Interstellar",
-        );
-        return;
-      }
-
-      const exactSeries = findSeries(normalizeCode(args));
-      if (exactSeries) {
-        await sendSeriesEpisodes(chatId, exactSeries.code);
-        return;
-      }
-
-      const exactMovie = findMovie(normalizeCode(args));
-      if (exactMovie) {
-        await deliverMovie(chatId, exactMovie);
-        return;
-      }
-
-      const seriesMatches = searchSeries(args);
-      if (seriesMatches.length > 0) {
-        await sendSeriesResults(
-          chatId,
-          seriesMatches,
-          `«${args}» bo‘yicha seriallar:`,
-        );
-      }
-
-      await sendMovieResults(
-        chatId,
-        searchMovies(args),
-        `«${args}» bo‘yicha qidiruv natijalari:`,
-      );
+      await handleSearchCommand(ctx);
       return;
     }
 
@@ -1690,321 +2378,47 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
 
     if (command === "/setstart") {
-      const startVideo =
-        getForwardedChannelPost(message.reply_to_message ?? message) ??
-        pendingForwardedPosts.get(String(userId));
-
-      if (!startVideo) {
-        await sendText(
-          chatId,
-          [
-            "Start videosini o‘rnatish uchun:",
-            "1. Kanal video postini shu botga forward qiling.",
-            "2. /setstart yuboring.",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      setSetting("start_channel_chat_id", startVideo.channelChatId);
-      setSetting(
-        "start_channel_message_id",
-        String(startVideo.channelMessageId),
-      );
-      pendingForwardedPosts.delete(String(userId));
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        "Start videosi saqlandi. Endi foydalanuvchi /start yuborganda shu video chiqadi.",
-      );
+      await handleSetstartCommand(ctx);
       return;
     }
 
     if (command === "/setstructure") {
-      const reference = parseTelegramPostLink(args);
-      if (!reference) {
-        const currentReference = getStructurePostReference();
-        await sendText(
-          chatId,
-          [
-            "Format: /setstructure POST_LINK",
-            `Joriy struktura posti: ${formatTelegramPostLink(currentReference)}`,
-            "Masalan: /setstructure https://t.me/c/KANAL_ID/17",
-            "",
-            "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      setSetting("structure_post_chat_id", reference.chatId);
-      setSetting("structure_post_message_id", String(reference.messageId));
-      const updated = await refreshStructurePost();
-      await sendText(
-        chatId,
-        updated
-          ? `Struktura posti sozlandi va yangilandi: ${reference.chatId}/${reference.messageId}`
-          : "Post manzili saqlandi, lekin hozircha tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
-      );
+      await handleSetstructureCommand(ctx);
       return;
     }
 
     if (command === "/setcontents") {
-      const tokens = args.split(/[\s,]+/).filter(Boolean);
-      const references = tokens.map((token) => parseTelegramPostLink(token));
-      const valid =
-        tokens.length > 0 && references.every((reference) => reference !== null);
-
-      if (!valid) {
-        await sendText(
-          chatId,
-          [
-            "Format: /setcontents LINK1 LINK2 LINK3 ...",
-            "Joriy mundarija postlari:",
-            ...getContentsPostReferences().map(
-              (reference, index) =>
-                `${index + 1}. ${formatTelegramPostLink(reference)}`,
-            ),
-            "",
-            "Masalan: /setcontents https://t.me/c/KANAL_ID/22 https://t.me/c/KANAL_ID/23",
-            "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      const list = references as TelegramPostReference[];
-      setSetting("contents_posts", JSON.stringify(list));
-      contentsCache.clear();
-      await updateStructurePost();
-      const updated = await refreshContentsPost();
-      await sendText(
-        chatId,
-        updated
-          ? `Mundarija postlari sozlandi (${list.length} ta) va yangilandi.`
-          : "Postlar manzili saqlandi, lekin ba‘zilarini tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
-      );
+      await handleSetcontentsCommand(ctx);
       return;
     }
 
     if (command === "/addseries") {
-      const [rawCode, rawTitle] = args
-        .split("|")
-        .map((value) => value.trim());
-      const code = normalizeCode(rawCode ?? "");
-      const title = rawTitle ?? "";
-
-      if (!code || !title) {
-        await sendText(
-          chatId,
-          [
-            "Format: /addseries KOD | Serial nomi",
-            "Masalan: /addseries DH | Dr. House",
-            "Bu format serial va bir nechta postli kinolar uchun ham ishlaydi.",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      if (findMovie(code)) {
-        await sendText(
-          chatId,
-          `${code} kodi oddiy kino sifatida mavjud. Serial uchun boshqa kod tanlang.`,
-        );
-        return;
-      }
-
-      const series = upsertSeries({ code, title });
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        `${series.code} — ${series.title} seriali yaratildi. Endi postlarni forward qilib /addpart yuboring.`,
-      );
+      await handleAddseriesCommand(ctx);
       return;
     }
 
     if (command === "/addpart") {
-      const partArgs = args.split("|").map((value) => value.trim());
-      const [rawCode, rawSeasonOrEpisode, rawEpisodeOrTitle, rawPartTitle] =
-        partArgs;
-      const code = normalizeCode(rawCode ?? "");
-      const hasSeason = partArgs.length >= 4;
-      const seasonNumber = Number(hasSeason ? rawSeasonOrEpisode : 1);
-      const episodeNumber = Number(
-        hasSeason ? rawEpisodeOrTitle : rawSeasonOrEpisode,
-      );
-      const title = hasSeason ? rawPartTitle ?? "" : rawEpisodeOrTitle ?? "";
-      const referencedForward =
-        getForwardedChannelPost(message.reply_to_message ?? message) ??
-        pendingForwardedPosts.get(String(userId));
-
-      if (
-        !code ||
-        !Number.isInteger(seasonNumber) ||
-        seasonNumber <= 0 ||
-        !Number.isInteger(episodeNumber) ||
-        episodeNumber <= 0 ||
-        !referencedForward
-      ) {
-        await sendText(
-          chatId,
-          [
-            "Yangi format: /addpart SERIAL_KOD | FASL | QISM | Qism nomi",
-            "Eski format: /addpart SERIAL_KOD | QISM | Qism nomi (1-fasl)",
-            "1. Serial yarating: /addseries DH | Dr. House",
-            "2. Kanal postini botga forward qiling.",
-            "3. /addpart DH | 1 | 1 | 1-qism",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      if (!findSeries(code)) {
-        await sendText(
-          chatId,
-          `${code} seriali topilmadi. Avval /addseries ${code} | Serial nomi yuboring.`,
-        );
-        return;
-      }
-
-      const episode = upsertSeriesEpisode({
-        seriesCode: code,
-        seasonNumber,
-        episodeNumber,
-        title,
-        channelChatId: referencedForward.channelChatId,
-        channelMessageId: referencedForward.channelMessageId,
-      });
-      if (!episode) {
-        await sendText(chatId, "Serial qismini saqlab bo‘lmadi.");
-        return;
-      }
-
-      pendingForwardedPosts.delete(String(userId));
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        `${code} serialining ${seasonNumber}-fasl ${episodeNumber}-qismi bazaga saqlandi.`,
-      );
+      await handleAddpartCommand(ctx);
       return;
     }
 
     if (command === "/setposter") {
-      const code = normalizeCode(args);
-      const photos = message.photo ?? message.reply_to_message?.photo;
-      const fileId =
-        photos && photos.length > 0 ? photos[photos.length - 1]!.file_id : null;
-
-      if (!code) {
-        await sendText(
-          chatId,
-          [
-            "Format: /setposter KOD, so‘ng rasm yuboring.",
-            "Yoki rasm captioniga /setposter KOD yozing (yoki rasmga reply qiling).",
-            "Kino yoki serial kodi bo‘lishi mumkin — bot o‘zi aniqlaydi.",
-            "Masalan: /setposter 101",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      if (fileId) {
-        pendingPosterRequests.delete(String(userId));
-        await savePosterFromAdmin(
-          chatId,
-          code,
-          fileId,
-          message.photo ? undefined : message.reply_to_message?.caption,
-        );
-        return;
-      }
-
-      if (!findSeries(code) && !findMovie(code)) {
-        await sendText(chatId, `${code} kod bo'yicha kino yoki serial topilmadi.`);
-        return;
-      }
-
-      pendingPosterRequests.set(String(userId), {
-        code,
-        expiresAt: Date.now() + 10 * 60 * 1000,
-      });
-      await sendText(
-        chatId,
-        `📸 ${code} uchun baza kanaldagi poster postini (rasm + matn) forward qiling yoki oddiy rasm yuboring.`,
-      );
+      await handleSetposterCommand(ctx);
       return;
     }
 
     if (command === "/delposter" || command === "/getposter") {
-      const code = normalizeCode(args);
-      const series = code ? findSeries(code) : null;
-      if (!series) {
-        await sendText(
-          chatId,
-          code && findMovie(code)
-            ? `${code} oddiy kino kodi, serial emas.`
-            : `Format: ${command} SERIAL_KOD (serial topilmadi yoki kod yozilmagan).`,
-        );
-        return;
-      }
-
-      if (command === "/delposter") {
-        const removed = clearSeriesPoster(series.code);
-        await sendText(
-          chatId,
-          removed
-            ? `🗑 Poster o‘chirildi.\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}`
-            : `${series.title} (${series.code}) uchun poster biriktirilmagan.`,
-        );
-        return;
-      }
-
-      const poster = getSeriesPoster(series.code);
-      if (!poster) {
-        await sendText(
-          chatId,
-          `❌ ${series.title} (${series.code}) uchun poster biriktirilmagan.`,
-        );
-        return;
-      }
-      try {
-        await telegramApi("sendPhoto", {
-          chat_id: chatId,
-          photo: poster,
-          caption: `✅ Poster biriktirilgan\n📺 Serial: ${series.title}\n🔢 Kod: ${series.code}\n📝 Tavsif: ${getSeriesPosterCaption(series.code) ? "bor" : "yo'q"}`,
-        });
-      } catch (err: unknown) {
-        logger.warn({ err, code: series.code }, "Failed to preview series poster");
-        await sendText(
-          chatId,
-          `Poster biriktirilgan, lekin rasmni ko‘rsatib bo‘lmadi (file_id yaroqsiz bo‘lishi mumkin). /setposter ${series.code} bilan yangilang.`,
-        );
-      }
+      await handlePosterCommand(ctx);
       return;
     }
 
     if (command === "/version") {
-      const versionSeries = listSeries();
-      await sendText(
-        chatId,
-        formatVersionMessage(versionInfo, {
-          movies: listMovies().length,
-          series: versionSeries.length,
-          episodes: versionSeries.reduce((sum, item) => sum + item.episodeCount, 0),
-        }),
-      );
+      await handleVersionCommand(ctx);
       return;
     }
 
     if (command === "/backup") {
-      if (chatId !== userId) {
-        await sendText(
-          chatId,
-          "Zaxira nusxasi faqat botning shaxsiy chatida yuboriladi.",
-        );
-        return;
-      }
-      await sendDatabaseBackup(chatId);
+      await handleBackupCommand(ctx);
       return;
     }
 
@@ -2014,326 +2428,55 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
 
     if (command === "/stats") {
-      await sendText(chatId, formatStatsMessage(getBotStats()));
+      await handleStatsCommand(ctx);
       return;
     }
 
     if (command === "/editparts") {
-      const parsed = parseEditParts(text.replace(/^\/\S+\s*/, ""));
-      if (!parsed.ok) {
-        await sendText(
-          chatId,
-          [
-            parsed.error,
-            "",
-            "Format (har qism yangi qatorda):",
-            "/editparts 101 | 1",
-            "1 | Birinchi nom",
-            "2 | Ikkinchi nom",
-          ].join("\n"),
-        );
-        return;
-      }
-      if (!findSeries(parsed.code)) {
-        await sendText(chatId, `${parsed.code} seriali topilmadi.`);
-        return;
-      }
-      if (parsed.items.length === 0) {
-        await sendText(chatId, formatEditPartsResult({ ...parsed, updated: [], missing: [] }));
-        return;
-      }
-
-      const result = updateSeriesEpisodeTitles(parsed.code, parsed.season, parsed.items);
-      if (result.updated.length > 0) {
-        await refreshStructurePost();
-      }
-      await sendText(chatId, formatEditPartsResult({ ...parsed, ...result }));
+      await handleEditpartsCommand(ctx);
       return;
     }
 
     if (command === "/editpart") {
-      const editArgs = args.split("|").map((value) => value.trim());
-      const hasSeason = editArgs.length >= 4;
-      const code = normalizeCode(editArgs[0] ?? "");
-      const seasonNumber = Number(hasSeason ? editArgs[1] : 1);
-      const episodeNumber = Number(hasSeason ? editArgs[2] : editArgs[1]);
-      const title = (hasSeason ? editArgs.slice(3) : editArgs.slice(2))
-        .join(" | ")
-        .trim();
-
-      if (
-        !code ||
-        !Number.isInteger(seasonNumber) ||
-        seasonNumber <= 0 ||
-        !Number.isInteger(episodeNumber) ||
-        episodeNumber <= 0 ||
-        !title ||
-        title.length > 100
-      ) {
-        await sendText(
-          chatId,
-          [
-            "Format: /editpart SERIAL_KOD | FASL | QISM | Yangi nom",
-            "Qisqa format (1-fasl): /editpart SERIAL_KOD | QISM | Yangi nom",
-            "Masalan: /editpart 101 | 1 | 3 | Uchinchi soat",
-            "Nom bo‘sh bo‘lmasligi va 100 belgidan oshmasligi kerak.",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      const existing = findSeriesEpisode(code, seasonNumber, episodeNumber);
-      if (!existing) {
-        await sendText(
-          chatId,
-          `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi topilmadi.`,
-        );
-        return;
-      }
-
-      updateSeriesEpisodeTitle(code, seasonNumber, episodeNumber, title);
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        [
-          `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi yangilandi.`,
-          `Eski nom: ${existing.title || "—"}`,
-          `Yangi nom: ${title}`,
-        ].join("\n"),
-      );
+      await handleEditpartCommand(ctx);
       return;
     }
 
     if (command === "/list") {
-      await sendText(chatId, formatMovieList());
+      await handleListCommand(ctx);
       return;
     }
 
     if (command === "/genre") {
-      const [rawCode, rawGenres] = args
-        .split("|")
-        .map((value) => value.trim());
-      const code = normalizeCode(rawCode ?? "");
-      const genres = (rawGenres ?? "")
-        .split(",")
-        .map((genre) => genre.trim())
-        .filter(Boolean);
-
-      if (!code || genres.length === 0) {
-        await sendText(
-          chatId,
-          [
-            "Format: /genre KOD | Janr 1, Janr 2",
-            "Masalan: /genre 101 | Tibbiy drama, Serial",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      if (!setMovieGenres(code, genres)) {
-        await sendText(chatId, `${code} kodi topilmadi.`);
-        return;
-      }
-
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        `${code} kodi uchun janrlar saqlandi: ${genres.join(", ")}`,
-      );
+      await handleGenreCommand(ctx);
       return;
     }
 
     if (command === "/delete") {
-      const code = normalizeCode(args);
-      if (!code) {
-        await sendText(chatId, "Format: /delete KOD");
-        return;
-      }
-
-      const deleted = deleteMovie(code);
-      if (deleted) {
-        await refreshStructurePost();
-      }
-      await sendText(
-        chatId,
-        deleted
-          ? `${code} kodi o‘chirildi.`
-          : `${code} kodi topilmadi.`,
-      );
+      await handleDeleteCommand(ctx);
       return;
     }
 
     if (command === "/deletepart") {
-      const [rawCode, rawSeason, rawEpisode] = args
-        .split("|")
-        .map((value) => value.trim());
-      const code = normalizeCode(rawCode ?? "");
-      const seasonNumber = Number(rawSeason);
-      const episodeNumber = Number(rawEpisode);
-
-      if (
-        !code ||
-        !Number.isInteger(seasonNumber) ||
-        seasonNumber <= 0 ||
-        !Number.isInteger(episodeNumber) ||
-        episodeNumber <= 0
-      ) {
-        await sendText(
-          chatId,
-          [
-            "Format: /deletepart SERIAL_KOD | FASL | QISM",
-            "Masalan: /deletepart DH | 1 | 3",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      const deleted = deleteSeriesEpisode(code, seasonNumber, episodeNumber);
-      if (deleted) {
-        await refreshStructurePost();
-      }
-      await sendText(
-        chatId,
-        deleted
-          ? `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi o‘chirildi.`
-          : `${code} seriali ${seasonNumber}-fasl ${episodeNumber}-qismi topilmadi.`,
-      );
+      await handleDeletepartCommand(ctx);
       return;
     }
 
     if (command === "/deleteseries") {
-      const code = normalizeCode(args);
-      if (!code) {
-        await sendText(chatId, "Format: /deleteseries SERIAL_KOD");
-        return;
-      }
-
-      const deleted = deleteSeries(code);
-      if (deleted) {
-        await refreshStructurePost();
-      }
-      await sendText(
-        chatId,
-        deleted
-          ? `${code} seriali va uning barcha qismlari o‘chirildi.`
-          : `${code} seriali topilmadi.`,
-      );
+      await handleDeleteseriesCommand(ctx);
       return;
     }
 
     if (command === "/add") {
-      const [rawCode, rawTitle, rawChatId, rawMessageId] = args
-        .split("|")
-        .map((value) => value.trim());
-      const code = normalizeCode(rawCode ?? "");
-      const title = rawTitle ?? "";
-
-      if (code && findSeries(code)) {
-        await sendText(
-          chatId,
-          `${code} kodi serial sifatida band. Avval /deleteseries ${code} yuboring yoki boshqa kod tanlang.`,
-        );
-        return;
-      }
-      const referencedForward =
-        getForwardedChannelPost(message.reply_to_message ?? message) ??
-        pendingForwardedPosts.get(String(userId));
-      const channelChatId = rawChatId || referencedForward?.channelChatId || "";
-      const channelMessageId =
-        Number(rawMessageId) || referencedForward?.channelMessageId || 0;
-
-      if (
-        !code ||
-        !title ||
-        !channelChatId ||
-        !Number.isInteger(channelMessageId) ||
-        channelMessageId <= 0 ||
-        (rawChatId && !rawMessageId)
-      ) {
-        await sendText(
-          chatId,
-          [
-            "Format noto‘g‘ri.",
-            "Tavsiya etilgan usul:",
-            "1. Kanal postini botga forward qiling.",
-            "2. /add 101 | Interstellar",
-            "",
-            "Eski usul:",
-            "/add 101 | Interstellar | -1001234567890 | 42",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      const movie = upsertMovie({
-        code,
-        title,
-        channelChatId,
-        channelMessageId,
-      });
-      pendingForwardedPosts.delete(String(userId));
-      await refreshStructurePost();
-      await sendText(chatId, `${movie.code} — ${movie.title} bazaga saqlandi.`);
+      await handleAddCommand(ctx);
       return;
     }
 
     if (command === "/addpost") {
-      const [rawCode, rawPostNumber, rawTitle] = args
-        .split("|")
-        .map((value) => value.trim());
-      const code = normalizeCode(rawCode ?? "");
-      const postNumber = Number(rawPostNumber);
-      const title = rawTitle ?? "";
-      const referencedForward =
-        getForwardedChannelPost(message.reply_to_message ?? message) ??
-        pendingForwardedPosts.get(String(userId));
-
-      if (
-        !code ||
-        !Number.isInteger(postNumber) ||
-        postNumber <= 1 ||
-        !referencedForward
-      ) {
-        await sendText(
-          chatId,
-          [
-            "Format: /addpost KOD | TARTIB | Izoh",
-            "Avval 1-postni /add bilan saqlang.",
-            "Keyin kanal postini forward qilib yuboring.",
-            "Masalan: /addpost 101 | 2 | Kino fayli",
-          ].join("\n"),
-        );
-        return;
-      }
-
-      if (!findMovie(code)) {
-        await sendText(
-          chatId,
-          `${code} kodi topilmadi. Avval poster yoki birinchi postni /add orqali saqlang.`,
-        );
-        return;
-      }
-
-      const post = upsertMoviePost({
-        movieCode: code,
-        postNumber,
-        title,
-        channelChatId: referencedForward.channelChatId,
-        channelMessageId: referencedForward.channelMessageId,
-      });
-      if (!post) {
-        await sendText(chatId, "Kino postini saqlab bo‘lmadi.");
-        return;
-      }
-
-      pendingForwardedPosts.delete(String(userId));
-      await refreshStructurePost();
-      await sendText(
-        chatId,
-        `${code} kodi uchun ${postNumber}-post saqlandi. Kod yuborilganda barcha postlar tartib bilan yuboriladi.`,
-      );
+      await handleAddpostCommand(ctx);
       return;
     }
+
 
     return;
   }
