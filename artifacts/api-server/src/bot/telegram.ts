@@ -67,6 +67,7 @@ import {
   todayKey,
 } from "./admin-tools";
 import { runBroadcast } from "./broadcast";
+import { createKeyedQueue } from "./keyed-queue";
 import { copyContentsPosts } from "./contents-delivery";
 import { logger } from "../lib/logger";
 
@@ -143,6 +144,11 @@ const pendingBroadcasts = new Map<
   { sourceChatId: number; sourceMessageId: number; expiresAt: number }
 >();
 let broadcastRunning = false;
+// Yangilanishlar: bir chat ketma-ket, turli chatlar parallel (ko'pi bilan 10 ta).
+const updateQueue = createKeyedQueue({
+  maxConcurrent: 10,
+  onError: (err) => logger.error({ err }, "Failed to handle update"),
+});
 const versionInfo = resolveVersion(process.env, runGit);
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
@@ -249,14 +255,32 @@ function getDiscussionUrl(): string | undefined {
   return value || undefined;
 }
 
-const defaultStructurePost: TelegramPostReference = {
+/** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
+function readPostLinksFromEnv(name: string): TelegramPostReference[] {
+  const raw = process.env[name]?.trim();
+  if (!raw) return [];
+  return raw
+    .split(/[\s,]+/)
+    .map((part) => parseTelegramPostLink(part))
+    .filter((reference): reference is TelegramPostReference => reference !== null);
+}
+
+// Standart qiymatlar: STRUCTURE_POST_LINK va CONTENTS_POST_LINKS env'lari bilan almashtiriladi.
+const defaultStructurePost: TelegramPostReference = readPostLinksFromEnv(
+  "STRUCTURE_POST_LINK",
+)[0] ?? {
   chatId: "-1004418309907",
   messageId: 17,
 };
 
-const defaultContentsPosts: TelegramPostReference[] = [22, 23, 24, 25, 26].map(
-  (messageId) => ({ chatId: "-1004418309907", messageId }),
-);
+const envContentsPosts = readPostLinksFromEnv("CONTENTS_POST_LINKS");
+const defaultContentsPosts: TelegramPostReference[] =
+  envContentsPosts.length > 0
+    ? envContentsPosts
+    : [22, 23, 24, 25, 26].map((messageId) => ({
+        chatId: "-1004418309907",
+        messageId,
+      }));
 
 const contentsCache = new Map<string, string>();
 
@@ -2517,15 +2541,24 @@ async function poll(): Promise<void> {
       for (const update of updates) {
         offset = update.update_id + 1;
         setSetting("telegram_update_offset", String(offset));
-        if (update.message) {
-          if (update.message.chat.id > 0) touchBotUser(update.message.chat.id);
-          await handleMessage(update.message);
-        }
-        if (update.callback_query) {
-          touchBotUser(update.callback_query.from.id);
-          await handleCallbackQuery(update.callback_query);
-        }
+        const queueKey = String(
+          update.message?.chat.id ??
+            update.callback_query?.message?.chat.id ??
+            update.callback_query?.from.id ??
+            update.update_id,
+        );
+        void updateQueue.run(queueKey, async () => {
+          if (update.message) {
+            if (update.message.chat.id > 0) touchBotUser(update.message.chat.id);
+            await handleMessage(update.message);
+          }
+          if (update.callback_query) {
+            touchBotUser(update.callback_query.from.id);
+            await handleCallbackQuery(update.callback_query);
+          }
+        });
       }
+      await updateQueue.waitForCapacity(200);
     } catch (err: unknown) {
       logger.error({ err }, "Telegram polling error");
       await new Promise((resolve) => setTimeout(resolve, 5000));
