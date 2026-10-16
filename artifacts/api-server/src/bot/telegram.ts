@@ -14,11 +14,15 @@ import {
   findSeriesEpisode,
   findSeriesEpisodeById,
   clearSeriesPoster,
+  clearMoviePoster,
   getSeriesPoster,
+  getMoviePoster,
   getSeriesPosterCaption,
+  getMoviePosterCaption,
   getSeriesProgress,
   saveSeriesProgress,
   setSeriesPoster,
+  setMoviePoster,
   getSetting,
   listMovies,
   listSeries,
@@ -49,7 +53,7 @@ import {
   getEpisodeNeighbors,
   parseEpisodeId,
 } from "./series-navigation";
-import { buildSeriesCaption, normalizeDescription } from "./series-card";
+import { buildSeriesCaption, buildMovieCaption, normalizeDescription } from "./series-card";
 import { createNavCleanup, shouldCleanup } from "./nav-cleanup";
 import {
   buildContentsPages,
@@ -616,9 +620,9 @@ async function configureBotCommands(): Promise<void> {
     { command: "editparts", description: "Ko‘p qism nomini bir xabarda tahrirlash" },
     { command: "stats", description: "Bot statistikasi" },
     { command: "broadcast", description: "Barcha foydalanuvchilarga xabar yuborish" },
-    { command: "setposter", description: "Serial posterini o‘rnatish" },
-    { command: "delposter", description: "Serial posterini o‘chirish" },
-    { command: "getposter", description: "Serial posteri holatini ko‘rish" },
+    { command: "setposter", description: "Kino/serial posterini o‘rnatish" },
+    { command: "delposter", description: "Kino/serial posterini o‘chirish" },
+    { command: "getposter", description: "Kino/serial posteri holatini ko‘rish" },
     { command: "genre", description: "Kino janrini belgilash" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
@@ -1006,6 +1010,27 @@ async function deliverMovie(
   if (!movie) {
     await sendText(chatId, "Bu kino bazada topilmadi.");
     return;
+  }
+
+  const poster = getMoviePoster(movie.code);
+  if (poster) {
+    const caption = buildMovieCaption({
+      title: movie.title,
+      code: movie.code,
+      description: getMoviePosterCaption(movie.code),
+    });
+    try {
+      await telegramApi("sendPhoto", {
+        chat_id: chatId,
+        photo: poster,
+        caption,
+      });
+    } catch (err: unknown) {
+      logger.warn(
+        { err, movieCode: movie.code },
+        "Failed to send movie poster; continuing without it",
+      );
+    }
   }
 
   const posts = listMoviePosts(movie.code);
@@ -1411,31 +1436,34 @@ function startAutoBackup(): void {
   setInterval(() => void tick(), 30 * 60_000);
 }
 
-async function saveSeriesPosterFromAdmin(
+async function savePosterFromAdmin(
   chatId: number,
   code: string,
   fileId: string,
   description?: string | null,
 ): Promise<void> {
   const series = findSeries(code);
-  if (!series) {
-    await sendText(
-      chatId,
-      findMovie(code)
-        ? `${code} oddiy kino kodi, serial emas. Poster faqat seriallar uchun.`
-        : `${code} seriali topilmadi.`,
-    );
+  const movie = series ? null : findMovie(code);
+  if (!series && !movie) {
+    await sendText(chatId, `${code} kod bo'yicha kino yoki serial topilmadi.`);
     return;
   }
 
   const desc = normalizeDescription(description);
-  setSeriesPoster(code, fileId, desc);
+  const label = series ? "📺 Serial" : "🎬 Kino";
+  const title = (series ?? movie)!.title;
+  const resolvedCode = (series ?? movie)!.code;
+  if (series) {
+    setSeriesPoster(resolvedCode, fileId, desc);
+  } else {
+    setMoviePoster(resolvedCode, fileId, desc);
+  }
   await sendText(
     chatId,
     [
       "✅ Poster muvaffaqiyatli saqlandi!",
-      `📺 Serial: ${series.title}`,
-      `🔢 Kod: ${series.code}`,
+      `${label}: ${title}`,
+      `🔢 Kod: ${resolvedCode}`,
       desc
         ? `📝 Tavsif saqlandi (${desc.length} belgi)`
         : "📝 Tavsif: matn yo'q (kanal postini forward qilsangiz matn ham olinadi)",
@@ -1639,7 +1667,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       pendingPosterRequests.delete(String(userId));
     } else if (message.photo && message.photo.length > 0) {
       pendingPosterRequests.delete(String(userId));
-      await saveSeriesPosterFromAdmin(
+      await savePosterFromAdmin(
         chatId,
         pendingPoster.code,
         message.photo[message.photo.length - 1]!.file_id,
@@ -2041,8 +2069,9 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         await sendText(
           chatId,
           [
-            "Format: /setposter SERIAL_KOD, so‘ng rasm yuboring.",
-            "Yoki rasm captioniga /setposter SERIAL_KOD yozing (yoki rasmga reply qiling).",
+            "Format: /setposter KOD, so‘ng rasm yuboring.",
+            "Yoki rasm captioniga /setposter KOD yozing (yoki rasmga reply qiling).",
+            "Kino yoki serial kodi bo‘lishi mumkin — bot o‘zi aniqlaydi.",
             "Masalan: /setposter 101",
           ].join("\n"),
         );
@@ -2051,7 +2080,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
       if (fileId) {
         pendingPosterRequests.delete(String(userId));
-        await saveSeriesPosterFromAdmin(
+        await savePosterFromAdmin(
           chatId,
           code,
           fileId,
@@ -2060,14 +2089,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         return;
       }
 
-      const series = findSeries(code);
-      if (!series) {
-        await sendText(
-          chatId,
-          findMovie(code)
-            ? `${code} oddiy kino kodi, serial emas. Poster faqat seriallar uchun.`
-            : `${code} seriali topilmadi.`,
-        );
+      if (!findSeries(code) && !findMovie(code)) {
+        await sendText(chatId, `${code} kod bo'yicha kino yoki serial topilmadi.`);
         return;
       }
 

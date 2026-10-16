@@ -50,3 +50,17 @@ export function buildSeriesCaption(input: {
   const body = truncateAtBoundary(description, CAPTION_LIMIT - footer.length - 2);
   return `${body}\n\n${footer}`;
 }
+
+export function buildMovieCaption(input: {
+  title: string;
+  code: string;
+  description: string | null;
+}): string {
+  const footer = `🔢 Kod: ${input.code}`;
+  const description = normalizeDescription(input.description);
+  if (!description) {
+    return `🎬 ${input.title.slice(0, 200)}\n\n${footer}`;
+  }
+  const body = truncateAtBoundary(description, CAPTION_LIMIT - footer.length - 2);
+  return `${body}\n\n${footer}`;
+}

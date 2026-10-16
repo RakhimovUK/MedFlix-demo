@@ -199,6 +199,16 @@ if (!seriesColumns.some((column) => column.name === "poster_caption")) {
   database.exec("ALTER TABLE series ADD COLUMN poster_caption TEXT");
 }
 
+const movieColumns = database
+  .prepare("PRAGMA table_info(movies)")
+  .all() as Array<Record<string, unknown>>;
+if (!movieColumns.some((column) => column.name === "poster_file_id")) {
+  database.exec("ALTER TABLE movies ADD COLUMN poster_file_id TEXT");
+}
+if (!movieColumns.some((column) => column.name === "poster_caption")) {
+  database.exec("ALTER TABLE movies ADD COLUMN poster_caption TEXT");
+}
+
 database.exec(`
   CREATE TABLE IF NOT EXISTS series_progress (
     chat_id INTEGER NOT NULL,
@@ -647,6 +657,44 @@ export function getSeriesPosterCaption(seriesCode: string): string | null {
   const row = database
     .prepare("SELECT poster_caption FROM series WHERE code = ?")
     .get(seriesCode) as Record<string, unknown> | undefined;
+  const value = row?.poster_caption;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+export function clearMoviePoster(movieCode: string): boolean {
+  const result = database
+    .prepare(
+      "UPDATE movies SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
+    )
+    .run(movieCode);
+  return Number(result.changes) > 0;
+}
+
+export function setMoviePoster(
+  movieCode: string,
+  fileId: string,
+  caption: string | null = null,
+): boolean {
+  const result = database
+    .prepare(
+      "UPDATE movies SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ?",
+    )
+    .run(fileId, caption, movieCode);
+  return Number(result.changes) > 0;
+}
+
+export function getMoviePoster(movieCode: string): string | null {
+  const row = database
+    .prepare("SELECT poster_file_id FROM movies WHERE code = ?")
+    .get(movieCode) as Record<string, unknown> | undefined;
+  const value = row?.poster_file_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function getMoviePosterCaption(movieCode: string): string | null {
+  const row = database
+    .prepare("SELECT poster_caption FROM movies WHERE code = ?")
+    .get(movieCode) as Record<string, unknown> | undefined;
   const value = row?.poster_caption;
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
