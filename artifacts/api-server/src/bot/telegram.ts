@@ -81,6 +81,8 @@ import {
   type ReplyMarkup,
 } from "./keyboards";
 import { createTelegramApi, type TelegramResponse } from "./telegram-api";
+import { alertKey, createAlertThrottle, formatAlert, isIgnorableTelegramError } from "./alerts";
+import { adminHelpText, buildAdminPanelKeyboard, parseAdminAction } from "./admin-panel";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -162,9 +164,31 @@ let broadcastRunning = false;
 // Yangilanishlar: bir chat ketma-ket, turli chatlar parallel (ko'pi bilan 10 ta).
 const updateQueue = createKeyedQueue({
   maxConcurrent: 10,
-  onError: (err) => logger.error({ err }, "Failed to handle update"),
+  onError: (err) => {
+    logger.error({ err }, "Failed to handle update");
+    notifyAdminsOfError("Yangilanishni qayta ishlash", err);
+  },
 });
 const versionInfo = resolveVersion(process.env, runGit);
+const alertThrottle = createAlertThrottle();
+
+function notifyAdminsOfError(source: string, err: unknown): void {
+  try {
+    if (isIgnorableTelegramError(err) || !alertThrottle.allow(alertKey(source, err))) {
+      return;
+    }
+    const text = formatAlert(source, err);
+    for (const adminId of getAdminIds()) {
+      const adminChatId = Number(adminId);
+      if (!Number.isSafeInteger(adminChatId)) continue;
+      sendText(adminChatId, text).catch((sendErr: unknown) =>
+        logger.warn({ sendErr }, "Failed to send admin alert"),
+      );
+    }
+  } catch (alertErr: unknown) {
+    logger.warn({ alertErr }, "Admin alert failed");
+  }
+}
 const subscriptionCache = new Map<number, { subscribed: boolean; expiresAt: number }>();
 
 /** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
@@ -289,6 +313,7 @@ function formatStructurePost(): string {
     "• /editpart KOD | Fasl | Qism | Yangi nom",
     "• /setposter KOD — poster qo‘shish/yangilash",
     "• /delposter KOD · /getposter KOD",
+    "• /admin — admin panel (tugmalar)",
     "• /backup — bazaning zaxira nusxasi",
     "• /version — bot qaysi commit bilan ishlayapti",
     "• /editparts KOD | FASL (keyingi qatorlarda: QISM | nom)",
@@ -503,6 +528,7 @@ async function configureBotCommands(): Promise<void> {
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },
     { command: "addpart", description: "Serial qismi qo‘shish" },
     { command: "editpart", description: "Serial qismi nomini tahrirlash" },
+    { command: "admin", description: "Admin panel (tugmalar)" },
     { command: "backup", description: "Bazaning zaxira nusxasini olish" },
     { command: "version", description: "Bot versiyasi (qaysi commit)" },
     { command: "editparts", description: "Ko‘p qism nomini bir xabarda tahrirlash" },
@@ -1324,6 +1350,43 @@ async function handleCallbackQuery(
   );
 }
 
+async function handleAdminPanelCallback(
+  callbackQuery: TelegramCallbackQuery,
+  message: TelegramMessage,
+): Promise<void> {
+  const userId = callbackQuery.from.id;
+  if (!isAdmin(userId)) {
+    await answerCallbackQuery(callbackQuery.id, "Bu bo‘lim faqat admin uchun.");
+    return;
+  }
+
+  const action = parseAdminAction(callbackQuery.data ?? "");
+  if (!action) {
+    await answerCallbackQuery(callbackQuery.id, "Noma’lum tugma.");
+    return;
+  }
+
+  await answerCallbackQuery(callbackQuery.id);
+  const ctx: CommandContext = {
+    chatId: message.chat.id,
+    userId,
+    message,
+    text: "",
+    command: "",
+    args: "",
+  };
+
+  if (action === "stats") return handleStatsCommand({ ...ctx, command: "/stats" });
+  if (action === "list") return handleListCommand({ ...ctx, command: "/list" });
+  if (action === "version") return handleVersionCommand({ ...ctx, command: "/version" });
+  if (action === "backup") return handleBackupCommand({ ...ctx, command: "/backup" });
+
+  const help = adminHelpText(action);
+  if (help) {
+    await sendText(ctx.chatId, help);
+  }
+}
+
 async function handleCallbackQueryInner(
   callbackQuery: TelegramCallbackQuery,
 ): Promise<void> {
@@ -1339,6 +1402,11 @@ async function handleCallbackQueryInner(
 
   if (data.startsWith("bc:")) {
     await handleBroadcastCallback(callbackQuery, message);
+    return;
+  }
+
+  if (data.startsWith("adm:")) {
+    await handleAdminPanelCallback(callbackQuery, message);
     return;
   }
 
@@ -2357,6 +2425,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/broadcast" ||
         command === "/backup" ||
         command === "/version" ||
+        command === "/admin" ||
         command === "/setposter" ||
         command === "/delposter" ||
         command === "/getposter" ||
@@ -2374,6 +2443,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           "Bu buyruq faqat admin uchun. Admin ID sozlanmagan bo‘lsa, TELEGRAM_ADMIN_IDS secretini kiriting.",
         );
       }
+      return;
+    }
+
+    if (command === "/admin") {
+      await sendText(chatId, "🛠 Admin panel\nKerakli bo‘limni tanlang:", buildAdminPanelKeyboard());
       return;
     }
 
@@ -2557,6 +2631,7 @@ async function poll(): Promise<void> {
       await updateQueue.waitForCapacity(200);
     } catch (err: unknown) {
       logger.error({ err }, "Telegram polling error");
+      notifyAdminsOfError("Telegram polling", err);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
