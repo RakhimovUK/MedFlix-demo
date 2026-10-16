@@ -7,8 +7,7 @@ Telegram bot that stores movie codes in SQLite and copies the matching movie pos
 - `pnpm --filter @workspace/api-server run dev` — run the API server and Telegram long-polling bot
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate Zod schemas from the OpenAPI spec
 - Required secret: `TELEGRAM_BOT_TOKEN` — token from BotFather
 - Optional env: `TELEGRAM_ADMIN_IDS` — comma-separated Telegram user IDs allowed to use admin commands
 - Optional env: `TELEGRAM_REQUIRED_CHANNEL_IDS` and `TELEGRAM_REQUIRED_CHAT_IDS` — comma-separated channel/chat IDs for subscription checks
