@@ -221,6 +221,16 @@ database.exec(`
   );
 `);
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS series_subscriptions (
+    chat_id INTEGER NOT NULL,
+    series_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chat_id, series_id),
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
+  );
+`);
+
 function mapSeriesEpisode(row: Record<string, unknown>): SeriesEpisode {
   return {
     id: Number(row.id),
@@ -732,6 +742,72 @@ export function getSeriesProgress(
   return row
     ? { ...mapSeriesEpisode(row), seriesCode: String(row.series_code) }
     : null;
+}
+
+export function isSeriesSubscribed(chatId: number, seriesCode: string): boolean {
+  const row = database
+    .prepare(
+      `SELECT 1 FROM series_subscriptions
+       INNER JOIN series ON series.id = series_subscriptions.series_id
+       WHERE series_subscriptions.chat_id = ? AND series.code = ?`,
+    )
+    .get(chatId, seriesCode);
+  return row !== undefined;
+}
+
+/** Obunani almashtiradi: yangi holatni (true = obuna), serial yo'q bo'lsa null qaytaradi. */
+export function toggleSeriesSubscription(
+  chatId: number,
+  seriesCode: string,
+): boolean | null {
+  const series = database
+    .prepare("SELECT id FROM series WHERE code = ?")
+    .get(seriesCode) as { id: number } | undefined;
+  if (!series) {
+    return null;
+  }
+
+  if (isSeriesSubscribed(chatId, seriesCode)) {
+    database
+      .prepare("DELETE FROM series_subscriptions WHERE chat_id = ? AND series_id = ?")
+      .run(chatId, series.id);
+    return false;
+  }
+
+  database
+    .prepare("INSERT OR IGNORE INTO series_subscriptions (chat_id, series_id) VALUES (?, ?)")
+    .run(chatId, series.id);
+  return true;
+}
+
+export function listSeriesSubscribers(seriesCode: string): number[] {
+  const rows = database
+    .prepare(
+      `SELECT series_subscriptions.chat_id FROM series_subscriptions
+       INNER JOIN series ON series.id = series_subscriptions.series_id
+       WHERE series.code = ? ORDER BY series_subscriptions.created_at, series_subscriptions.chat_id`,
+    )
+    .all(seriesCode) as Array<{ chat_id: number }>;
+  return rows.map((row) => row.chat_id);
+}
+
+export function removeSeriesSubscriber(chatId: number, seriesCode: string): void {
+  database
+    .prepare(
+      `DELETE FROM series_subscriptions WHERE chat_id = ?
+       AND series_id = (SELECT id FROM series WHERE code = ?)`,
+    )
+    .run(chatId, seriesCode);
+}
+
+export function listUserSubscriptions(chatId: number): Array<{ code: string; title: string }> {
+  return database
+    .prepare(
+      `SELECT series.code AS code, series.title AS title FROM series_subscriptions
+       INNER JOIN series ON series.id = series_subscriptions.series_id
+       WHERE series_subscriptions.chat_id = ? ORDER BY series.title`,
+    )
+    .all(chatId) as Array<{ code: string; title: string }>;
 }
 
 export function deleteSeries(code: string): boolean {

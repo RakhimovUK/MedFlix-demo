@@ -20,6 +20,11 @@ import {
   getSeriesPosterCaption,
   getMoviePosterCaption,
   getSeriesProgress,
+  isSeriesSubscribed,
+  listSeriesSubscribers,
+  listUserSubscriptions,
+  removeSeriesSubscriber,
+  toggleSeriesSubscription,
   saveSeriesProgress,
   setSeriesPoster,
   setMoviePoster,
@@ -83,6 +88,14 @@ import {
 import { createTelegramApi, type TelegramResponse } from "./telegram-api";
 import { alertKey, createAlertThrottle, formatAlert, isIgnorableTelegramError } from "./alerts";
 import { adminHelpText, buildAdminPanelKeyboard, parseAdminAction } from "./admin-panel";
+import {
+  buildNotifyRow,
+  formatNewEpisodeMessage,
+  isNewLatestEpisode,
+  notifySubscribers,
+  parseNotifyData,
+  replaceNotifyRow,
+} from "./series-notify";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -126,6 +139,7 @@ type TelegramMessage = {
   forward_from_chat?: TelegramChat;
   forward_from_message_id?: number;
   reply_to_message?: TelegramMessage;
+  reply_markup?: ReplyMarkup;
 };
 
 type TelegramCallbackQuery = {
@@ -731,6 +745,12 @@ async function sendSeriesEpisodes(
   rows.push([
     { text: "📋 Barcha qismlar", callback_data: episodeListCallback(episodes[0]!.id) },
   ]);
+  rows.push(
+    buildNotifyRow(
+      encodeCallbackValue(series.code),
+      isSeriesSubscribed(chatId, series.code),
+    ),
+  );
   const replyMarkup = { inline_keyboard: rows };
 
   const poster = getSeriesPoster(series.code);
@@ -1350,6 +1370,45 @@ async function handleCallbackQuery(
   );
 }
 
+async function handleNotifyToggleCallback(
+  callbackQuery: TelegramCallbackQuery,
+  message: TelegramMessage,
+  chatId: number,
+): Promise<void> {
+  const encoded = parseNotifyData(callbackQuery.data ?? "");
+  const code = encoded ? decodeCallbackValue(encoded) : null;
+  const subscribed = code ? toggleSeriesSubscription(chatId, code) : null;
+  if (!code || subscribed === null) {
+    await answerCallbackQuery(callbackQuery.id, "Serial topilmadi.");
+    return;
+  }
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    subscribed
+      ? "🔔 Yangi qism chiqsa, xabar beramiz."
+      : "🔕 Xabar o‘chirildi.",
+  );
+
+  const rows = message.reply_markup?.inline_keyboard;
+  if (rows) {
+    try {
+      await telegramApi("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: message.message_id,
+        reply_markup: {
+          inline_keyboard: replaceNotifyRow(
+            rows,
+            buildNotifyRow(encodeCallbackValue(code), subscribed),
+          ),
+        },
+      });
+    } catch (err: unknown) {
+      logger.warn({ err }, "Failed to refresh notify button");
+    }
+  }
+}
+
 async function handleAdminPanelCallback(
   callbackQuery: TelegramCallbackQuery,
   message: TelegramMessage,
@@ -1435,6 +1494,11 @@ async function handleCallbackQueryInner(
 
   if (!(await requireSubscription(chatId, userId))) {
     await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (data.startsWith("ntf:")) {
+    await handleNotifyToggleCallback(callbackQuery, message, chatId);
     return;
   }
 
@@ -1797,6 +1861,7 @@ async function handleAddpartCommand(ctx: CommandContext): Promise<void> {
     return;
   }
 
+  const existingEpisodes = listSeriesEpisodes(code);
   const episode = upsertSeriesEpisode({
     seriesCode: code,
     seasonNumber,
@@ -1816,7 +1881,72 @@ async function handleAddpartCommand(ctx: CommandContext): Promise<void> {
     chatId,
     `${code} serialining ${seasonNumber}-fasl ${episodeNumber}-qismi bazaga saqlandi.`,
   );
+  if (isNewLatestEpisode(existingEpisodes, { seasonNumber, episodeNumber })) {
+    void notifyNewEpisode(chatId, code, episode).catch((err: unknown) =>
+      logger.error({ err }, "New episode notification failed"),
+    );
+  }
   return;
+}
+
+async function notifyNewEpisode(
+  adminChatId: number,
+  seriesCode: string,
+  episode: NonNullable<ReturnType<typeof upsertSeriesEpisode>>,
+): Promise<void> {
+  const series = findSeries(seriesCode);
+  const subscribers = listSeriesSubscribers(seriesCode);
+  if (!series || subscribers.length === 0) {
+    return;
+  }
+
+  const message = formatNewEpisodeMessage({
+    seriesTitle: series.title,
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+    episodeTitle: episode.title,
+  });
+  const keyboard = {
+    inline_keyboard: [[{ text: "▶️ Ko‘rish", callback_data: episodeCallback(episode.id) }]],
+  };
+
+  const result = await notifySubscribers({
+    subscribers,
+    send: (subscriberChatId) => sendText(subscriberChatId, message, keyboard),
+    onUnreachable: (subscriberChatId) =>
+      removeSeriesSubscriber(subscriberChatId, seriesCode),
+  });
+
+  await sendText(
+    adminChatId,
+    [
+      `🔔 Yangi qism xabari: ${result.sent} ta yuborildi.`,
+      result.removed > 0 ? `Botni bloklaganlar obunadan olindi: ${result.removed}` : "",
+      result.failed > 0 ? `Yuborilmadi (xato): ${result.failed}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
+async function handleMysubsCommand(ctx: CommandContext): Promise<void> {
+  const subscriptions = listUserSubscriptions(ctx.chatId);
+  if (subscriptions.length === 0) {
+    await sendText(
+      ctx.chatId,
+      "Hozircha hech qaysi serialga obuna bo‘lmagansiz.\nSerial kartasidagi «🔔 Yangi qismlar haqida xabar ber» tugmasini bosing.",
+    );
+    return;
+  }
+
+  await sendText(ctx.chatId, "🔔 Xabar oladigan seriallaringiz:", {
+    inline_keyboard: subscriptions.slice(0, 50).map((item) => [
+      {
+        text: `📺 ${item.title} (${item.code})`.slice(0, 64),
+        callback_data: `series:${encodeCallbackValue(item.code)}`,
+      },
+    ]),
+  });
 }
 
 async function handleSetposterCommand(ctx: CommandContext): Promise<void> {
@@ -2395,6 +2525,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
 
       await sendText(chatId, welcomeLines.join("\n"), getStartKeyboard());
+      return;
+    }
+
+    if (command === "/mysubs") {
+      await handleMysubsCommand(ctx);
       return;
     }
 
