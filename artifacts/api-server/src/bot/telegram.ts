@@ -20,6 +20,10 @@ import {
   getSeriesPosterCaption,
   getMoviePosterCaption,
   getSeriesProgress,
+  listRecentEpisodes,
+  listTopContent,
+  recordEpisodeView,
+  recordMovieView,
   isSeriesSubscribed,
   listSeriesSubscribers,
   listUserSubscriptions,
@@ -97,6 +101,7 @@ import {
   replaceNotifyRow,
 } from "./series-notify";
 import { createRateLimiter, type RateDecision } from "./rate-limiter";
+import { buildNewKeyboard, buildTopKeyboard, NEW_HEADER, TOP_HEADER } from "./discover";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -553,6 +558,9 @@ async function configureBotCommands(): Promise<void> {
       { command: "start", description: "Botni boshlash" },
       { command: "catalog", description: "Katalogni ko‘rish" },
       { command: "search", description: "Kino nomi bo‘yicha qidirish" },
+      { command: "new", description: "So‘nggi qo‘shilganlar" },
+      { command: "top", description: "Eng ko‘p ko‘rilganlar" },
+      { command: "mysubs", description: "Yangi qism xabarlarim" },
     ],
   });
 
@@ -560,6 +568,9 @@ async function configureBotCommands(): Promise<void> {
     { command: "start", description: "Botni boshlash" },
     { command: "catalog", description: "Katalogni ko‘rish" },
     { command: "search", description: "Kino nomi bo‘yicha qidirish" },
+    { command: "new", description: "So‘nggi qo‘shilganlar" },
+    { command: "top", description: "Eng ko‘p ko‘rilganlar" },
+    { command: "mysubs", description: "Yangi qism xabarlarim" },
     { command: "add", description: "Kanal postidan kino qo‘shish" },
     { command: "addpost", description: "Kinoga qo‘shimcha post qo‘shish" },
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },
@@ -953,8 +964,9 @@ async function deliverMovie(
           },
         ];
 
+  let delivered = false;
   for (const post of references) {
-    await deliverChannelPost(
+    const messageId = await deliverChannelPost(
       chatId,
       {
         code: movie.code,
@@ -963,7 +975,54 @@ async function deliverMovie(
       },
       "Kino",
     );
+    if (messageId !== null) {
+      delivered = true;
+    }
   }
+  if (delivered) {
+    trackView("movie", movie.id, chatId);
+  }
+}
+
+/** Ko'rishni hisoblaydi (adminlarning sinovlari reytingni buzmasligi uchun hisobga olinmaydi). */
+function trackView(kind: "movie" | "episode", id: number, chatId: number): void {
+  if (isAdmin(chatId)) {
+    return;
+  }
+  try {
+    if (kind === "movie") {
+      recordMovieView(chatId, id);
+    } else {
+      recordEpisodeView(chatId, id);
+    }
+  } catch (err: unknown) {
+    logger.warn({ err }, "Failed to record view");
+  }
+}
+
+async function sendNewContent(chatId: number): Promise<void> {
+  const keyboard = buildNewKeyboard(
+    listMovies().slice(0, 5),
+    listRecentEpisodes(5),
+    encodeCallbackValue,
+  );
+  if (!keyboard) {
+    await sendText(chatId, "Hozircha yangi kontent yo‘q.");
+    return;
+  }
+  await sendText(chatId, NEW_HEADER, keyboard);
+}
+
+async function sendTopContent(chatId: number): Promise<void> {
+  const keyboard = buildTopKeyboard(listTopContent(10, 30), encodeCallbackValue);
+  if (!keyboard) {
+    await sendText(
+      chatId,
+      "🔥 Reyting hali shakllanmagan. Ko‘rishlar hisoblana boshladi, birozdan keyin qaytib keling.",
+    );
+    return;
+  }
+  await sendText(chatId, TOP_HEADER, keyboard);
 }
 
 async function deliverSeriesEpisode(
@@ -1005,6 +1064,7 @@ async function deliverSeriesEpisode(
 
   setLastDeliveredEpisodeMessage(chatId, seriesCode, deliveredMessageId);
   saveSeriesProgress(chatId, episode.id);
+  trackView("episode", episode.id, chatId);
 
   if (previousMessageId !== null && previousMessageId !== deliveredMessageId) {
     try {
@@ -1517,6 +1577,12 @@ async function handleCallbackQueryInner(
 
   if (!(await requireSubscription(chatId, userId))) {
     await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (data === "discover:new" || data === "discover:top") {
+    await answerCallbackQuery(callbackQuery.id);
+    await (data === "discover:new" ? sendNewContent(chatId) : sendTopContent(chatId));
     return;
   }
 
@@ -2548,6 +2614,16 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
 
       await sendText(chatId, welcomeLines.join("\n"), getStartKeyboard());
+      return;
+    }
+
+    if (command === "/new") {
+      await sendNewContent(chatId);
+      return;
+    }
+
+    if (command === "/top") {
+      await sendTopContent(chatId);
       return;
     }
 

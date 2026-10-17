@@ -231,6 +231,17 @@ database.exec(`
   );
 `);
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS content_views (
+    kind TEXT NOT NULL,
+    content_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    day TEXT NOT NULL,
+    PRIMARY KEY (kind, content_id, chat_id, day)
+  );
+  CREATE INDEX IF NOT EXISTS idx_content_views_day ON content_views (day);
+`);
+
 function mapSeriesEpisode(row: Record<string, unknown>): SeriesEpisode {
   return {
     id: Number(row.id),
@@ -808,6 +819,84 @@ export function listUserSubscriptions(chatId: number): Array<{ code: string; tit
        WHERE series_subscriptions.chat_id = ? ORDER BY series.title`,
     )
     .all(chatId) as Array<{ code: string; title: string }>;
+}
+
+const todayUtc = (): string => new Date().toISOString().slice(0, 10);
+
+/** Bir foydalanuvchining bir kontentni bir kunda ko'rishi bir marta hisoblanadi. */
+export function recordMovieView(chatId: number, movieId: number, day: string = todayUtc()): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO content_views (kind, content_id, chat_id, day)
+       SELECT 'movie', id, ?, ? FROM movies WHERE id = ?`,
+    )
+    .run(chatId, day, movieId);
+}
+
+export function recordEpisodeView(chatId: number, episodeId: number, day: string = todayUtc()): void {
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO content_views (kind, content_id, chat_id, day)
+       SELECT 'series', series_id, ?, ? FROM series_episodes WHERE id = ?`,
+    )
+    .run(chatId, day, episodeId);
+}
+
+export function listTopContent(
+  limit = 10,
+  days = 30,
+  now: Date = new Date(),
+): Array<{ kind: "movie" | "series"; code: string; title: string; viewers: number }> {
+  const since = new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+  const rows = database
+    .prepare(
+      `SELECT kind, code, title, viewers FROM (
+         SELECT 'movie' AS kind, movies.code AS code, movies.title AS title, COUNT(*) AS viewers
+         FROM content_views INNER JOIN movies ON movies.id = content_views.content_id
+         WHERE content_views.kind = 'movie' AND content_views.day >= ?
+         GROUP BY movies.id
+         UNION ALL
+         SELECT 'series', series.code, series.title, COUNT(*)
+         FROM content_views INNER JOIN series ON series.id = content_views.content_id
+         WHERE content_views.kind = 'series' AND content_views.day >= ?
+         GROUP BY series.id
+       ) ORDER BY viewers DESC, title COLLATE NOCASE LIMIT ?`,
+    )
+    .all(since, since, limit) as Array<{ kind: string; code: string; title: string; viewers: number }>;
+  return rows.map((row) => ({
+    kind: row.kind === "series" ? "series" : "movie",
+    code: String(row.code),
+    title: String(row.title),
+    viewers: Number(row.viewers),
+  }));
+}
+
+export function listRecentEpisodes(limit = 5): Array<{
+  id: number;
+  seriesCode: string;
+  seriesTitle: string;
+  seasonNumber: number;
+  episodeNumber: number;
+}> {
+  const rows = database
+    .prepare(
+      `SELECT series_episodes.id AS id, series.code AS series_code, series.title AS series_title,
+              series_episodes.season_number AS season_number, series_episodes.episode_number AS episode_number
+       FROM series_episodes INNER JOIN series ON series.id = series_episodes.series_id
+       WHERE series_episodes.id = (
+         SELECT e2.id FROM series_episodes e2 WHERE e2.series_id = series_episodes.series_id
+         ORDER BY e2.season_number DESC, e2.episode_number DESC LIMIT 1
+       )
+       ORDER BY series_episodes.created_at DESC, series_episodes.id DESC LIMIT ?`,
+    )
+    .all(limit) as Array<Record<string, unknown>>;
+  return rows.map((row) => ({
+    id: Number(row.id),
+    seriesCode: String(row.series_code),
+    seriesTitle: String(row.series_title),
+    seasonNumber: Number(row.season_number),
+    episodeNumber: Number(row.episode_number),
+  }));
 }
 
 export function deleteSeries(code: string): boolean {

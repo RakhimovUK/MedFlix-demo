@@ -41,6 +41,6 @@ test("obuna klaviaturasi: oxirida 'Tekshirish'; start: muhokama faqat URL bo'lsa
   const sub = buildSubscriptionKeyboard([{ chatId: "-1", label: "Kanal", url: "https://t.me/k" }]);
   assert.equal(sub.inline_keyboard.length, 2);
   assert.equal(sub.inline_keyboard[1]![0]!.callback_data, "subscription:check");
-  assert.equal(buildStartKeyboard().inline_keyboard.length, 1);
-  assert.equal(buildStartKeyboard("https://t.me/c").inline_keyboard.length, 2);
+  assert.equal(buildStartKeyboard().inline_keyboard.length, 2);
+  assert.equal(buildStartKeyboard("https://t.me/c").inline_keyboard.length, 3);
 });

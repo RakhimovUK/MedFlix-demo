@@ -49,6 +49,10 @@ export function buildStartKeyboard(discussionUrl?: string): ReplyMarkup {
       { text: "🎬 Katalog", callback_data: "catalog" },
       { text: "🔍 Qidirish", callback_data: "search:help" },
     ],
+    [
+      { text: "🆕 Yangilari", callback_data: "discover:new" },
+      { text: "🔥 Top", callback_data: "discover:top" },
+    ],
   ];
   if (discussionUrl) {
     rows.push([{ text: "💬 Muhokama chati", url: discussionUrl }]);
