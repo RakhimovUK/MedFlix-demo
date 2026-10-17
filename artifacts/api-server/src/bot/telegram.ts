@@ -96,6 +96,7 @@ import {
   parseNotifyData,
   replaceNotifyRow,
 } from "./series-notify";
+import { createRateLimiter, type RateDecision } from "./rate-limiter";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -185,6 +186,28 @@ const updateQueue = createKeyedQueue({
 });
 const versionInfo = resolveVersion(process.env, runGit);
 const alertThrottle = createAlertThrottle();
+const rateLimiter = createRateLimiter();
+
+async function handleRateLimited(
+  update: TelegramUpdate,
+  decision: Exclude<RateDecision, "ok">,
+): Promise<void> {
+  try {
+    if (update.callback_query) {
+      await answerCallbackQuery(
+        update.callback_query.id,
+        "⏳ Juda tez. Bir necha soniya kuting.",
+      );
+    } else if (update.message && decision === "warn") {
+      await sendText(
+        update.message.chat.id,
+        "⏳ Juda ko‘p so‘rov yubordingiz. 20 soniyadan keyin qayta urinib ko‘ring.",
+      );
+    }
+  } catch (err: unknown) {
+    logger.warn({ err }, "Rate-limit notice failed");
+  }
+}
 
 function notifyAdminsOfError(source: string, err: unknown): void {
   try {
@@ -2746,6 +2769,15 @@ async function poll(): Promise<void> {
       for (const update of updates) {
         offset = update.update_id + 1;
         setSetting("telegram_update_offset", String(offset));
+        const senderId =
+          update.message?.from?.id ?? update.callback_query?.from.id;
+        if (senderId !== undefined && !isAdmin(senderId)) {
+          const decision = rateLimiter.check(String(senderId));
+          if (decision !== "ok") {
+            void handleRateLimited(update, decision);
+            continue;
+          }
+        }
         const queueKey = String(
           update.message?.chat.id ??
             update.callback_query?.message?.chat.id ??
