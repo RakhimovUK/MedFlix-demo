@@ -53,6 +53,7 @@ export function buildStartKeyboard(discussionUrl?: string): ReplyMarkup {
       { text: "🆕 Yangilari", callback_data: "discover:new" },
       { text: "🔥 Top", callback_data: "discover:top" },
     ],
+    [{ text: "⭐ Sevimlilar", callback_data: "fav:list" }],
   ];
   if (discussionUrl) {
     rows.push([{ text: "💬 Muhokama chati", url: discussionUrl }]);

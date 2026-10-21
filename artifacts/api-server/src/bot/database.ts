@@ -242,6 +242,16 @@ database.exec(`
   CREATE INDEX IF NOT EXISTS idx_content_views_day ON content_views (day);
 `);
 
+database.exec(`
+  CREATE TABLE IF NOT EXISTS favorites (
+    chat_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    content_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (chat_id, kind, content_id)
+  );
+`);
+
 function mapSeriesEpisode(row: Record<string, unknown>): SeriesEpisode {
   return {
     id: Number(row.id),
@@ -896,6 +906,74 @@ export function listRecentEpisodes(limit = 5): Array<{
     seriesTitle: String(row.series_title),
     seasonNumber: Number(row.season_number),
     episodeNumber: Number(row.episode_number),
+  }));
+}
+
+function resolveContentId(kind: "movie" | "series", code: string): number | null {
+  const table = kind === "movie" ? "movies" : "series";
+  const row = database
+    .prepare(`SELECT id FROM ${table} WHERE code = ?`)
+    .get(code) as { id: number } | undefined;
+  return row ? Number(row.id) : null;
+}
+
+export function isFavorite(chatId: number, kind: "movie" | "series", code: string): boolean {
+  const contentId = resolveContentId(kind, code);
+  if (contentId === null) {
+    return false;
+  }
+  return (
+    database
+      .prepare("SELECT 1 FROM favorites WHERE chat_id = ? AND kind = ? AND content_id = ?")
+      .get(chatId, kind, contentId) !== undefined
+  );
+}
+
+/** Sevimlini almashtiradi: yangi holat (true = sevimli), kod topilmasa null. */
+export function toggleFavorite(
+  chatId: number,
+  kind: "movie" | "series",
+  code: string,
+): boolean | null {
+  const contentId = resolveContentId(kind, code);
+  if (contentId === null) {
+    return null;
+  }
+
+  if (isFavorite(chatId, kind, code)) {
+    database
+      .prepare("DELETE FROM favorites WHERE chat_id = ? AND kind = ? AND content_id = ?")
+      .run(chatId, kind, contentId);
+    return false;
+  }
+
+  database
+    .prepare("INSERT OR IGNORE INTO favorites (chat_id, kind, content_id) VALUES (?, ?, ?)")
+    .run(chatId, kind, contentId);
+  return true;
+}
+
+export function listFavorites(
+  chatId: number,
+  limit = 50,
+): Array<{ kind: "movie" | "series"; code: string; title: string }> {
+  const rows = database
+    .prepare(
+      `SELECT kind, code, title FROM (
+         SELECT 'movie' AS kind, movies.code AS code, movies.title AS title, favorites.rowid AS ord
+         FROM favorites INNER JOIN movies ON movies.id = favorites.content_id
+         WHERE favorites.chat_id = ? AND favorites.kind = 'movie'
+         UNION ALL
+         SELECT 'series', series.code, series.title, favorites.rowid
+         FROM favorites INNER JOIN series ON series.id = favorites.content_id
+         WHERE favorites.chat_id = ? AND favorites.kind = 'series'
+       ) ORDER BY ord DESC LIMIT ?`,
+    )
+    .all(chatId, chatId, limit) as Array<{ kind: string; code: string; title: string }>;
+  return rows.map((row) => ({
+    kind: row.kind === "series" ? "series" : "movie",
+    code: String(row.code),
+    title: String(row.title),
   }));
 }
 

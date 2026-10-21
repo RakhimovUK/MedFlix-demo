@@ -55,3 +55,23 @@ export function getPostsChannelId(env: Env = process.env): string {
   const value = env.TELEGRAM_POSTS_CHANNEL_ID?.trim();
   return value || LEGACY_POSTS_CHANNEL_ID;
 }
+
+/** Yopiq guruh topigi havolasi: https://t.me/c/<guruh>/<topic>[/<xabar>] -> chat ID va topic (thread) ID. */
+export function parseTopicLink(
+  link: string,
+): { chatId: number; threadId: number } | null {
+  const match = /^https?:\/\/t\.me\/c\/(\d{5,15})\/(\d{1,10})(?:\/\d{1,10})?\/?$/.exec(link.trim());
+  if (!match) {
+    return null;
+  }
+  const chatId = Number(`-100${match[1]}`);
+  const threadId = Number(match[2]);
+  return Number.isSafeInteger(chatId) && threadId > 0 ? { chatId, threadId } : null;
+}
+
+export function getRequestsTopic(
+  env: Env = process.env,
+): { chatId: number; threadId: number } | null {
+  const link = env.TELEGRAM_REQUESTS_TOPIC_LINK?.trim();
+  return link ? parseTopicLink(link) : null;
+}

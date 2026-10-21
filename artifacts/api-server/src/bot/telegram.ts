@@ -20,6 +20,9 @@ import {
   getSeriesPosterCaption,
   getMoviePosterCaption,
   getSeriesProgress,
+  isFavorite,
+  listFavorites,
+  toggleFavorite,
   listRecentEpisodes,
   listTopContent,
   recordEpisodeView,
@@ -102,6 +105,14 @@ import {
 } from "./series-notify";
 import { createRateLimiter, type RateDecision } from "./rate-limiter";
 import { buildNewKeyboard, buildTopKeyboard, NEW_HEADER, TOP_HEADER } from "./discover";
+import {
+  buildFavoriteRow,
+  buildFavoritesKeyboard,
+  FAVORITES_EMPTY,
+  FAVORITES_HEADER,
+  parseFavoriteData,
+  replaceFavoriteRow,
+} from "./favorites";
 import { formatVersionMessage, resolveVersion, runGit } from "./version-info";
 import {
   formatEditPartsResult,
@@ -561,6 +572,7 @@ async function configureBotCommands(): Promise<void> {
       { command: "new", description: "So‘nggi qo‘shilganlar" },
       { command: "top", description: "Eng ko‘p ko‘rilganlar" },
       { command: "mysubs", description: "Yangi qism xabarlarim" },
+      { command: "fav", description: "Sevimlilarim" },
     ],
   });
 
@@ -571,6 +583,7 @@ async function configureBotCommands(): Promise<void> {
     { command: "new", description: "So‘nggi qo‘shilganlar" },
     { command: "top", description: "Eng ko‘p ko‘rilganlar" },
     { command: "mysubs", description: "Yangi qism xabarlarim" },
+    { command: "fav", description: "Sevimlilarim" },
     { command: "add", description: "Kanal postidan kino qo‘shish" },
     { command: "addpost", description: "Kinoga qo‘shimcha post qo‘shish" },
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },
@@ -785,6 +798,13 @@ async function sendSeriesEpisodes(
       isSeriesSubscribed(chatId, series.code),
     ),
   );
+  rows.push(
+    buildFavoriteRow(
+      "series",
+      encodeCallbackValue(series.code),
+      isFavorite(chatId, "series", series.code),
+    ),
+  );
   const replyMarkup = { inline_keyboard: rows };
 
   const poster = getSeriesPoster(series.code);
@@ -964,8 +984,15 @@ async function deliverMovie(
           },
         ];
 
+  const favoriteRows = [
+    buildFavoriteRow(
+      "movie",
+      encodeCallbackValue(movie.code),
+      isFavorite(chatId, "movie", movie.code),
+    ),
+  ];
   let delivered = false;
-  for (const post of references) {
+  for (const [index, post] of references.entries()) {
     const messageId = await deliverChannelPost(
       chatId,
       {
@@ -974,6 +1001,7 @@ async function deliverMovie(
         channelMessageId: post.channelMessageId,
       },
       "Kino",
+      index === 0 ? favoriteRows : [],
     );
     if (messageId !== null) {
       delivered = true;
@@ -1453,6 +1481,52 @@ async function handleCallbackQuery(
   );
 }
 
+async function sendFavorites(chatId: number): Promise<void> {
+  const keyboard = buildFavoritesKeyboard(listFavorites(chatId), encodeCallbackValue);
+  if (!keyboard) {
+    await sendText(chatId, FAVORITES_EMPTY);
+    return;
+  }
+  await sendText(chatId, FAVORITES_HEADER, keyboard);
+}
+
+async function handleFavoriteToggleCallback(
+  callbackQuery: TelegramCallbackQuery,
+  message: TelegramMessage,
+  chatId: number,
+): Promise<void> {
+  const parsed = parseFavoriteData(callbackQuery.data ?? "");
+  const code = parsed ? decodeCallbackValue(parsed.encoded) : null;
+  const state = parsed && code ? toggleFavorite(chatId, parsed.kind, code) : null;
+  if (!parsed || !code || state === null) {
+    await answerCallbackQuery(callbackQuery.id, "Topilmadi.");
+    return;
+  }
+
+  await answerCallbackQuery(
+    callbackQuery.id,
+    state ? "⭐ Sevimlilarga qo‘shildi." : "Sevimlilardan olib tashlandi.",
+  );
+
+  const rows = message.reply_markup?.inline_keyboard;
+  if (rows) {
+    try {
+      await telegramApi("editMessageReplyMarkup", {
+        chat_id: chatId,
+        message_id: message.message_id,
+        reply_markup: {
+          inline_keyboard: replaceFavoriteRow(
+            rows,
+            buildFavoriteRow(parsed.kind, parsed.encoded, state),
+          ),
+        },
+      });
+    } catch (err: unknown) {
+      logger.warn({ err }, "Failed to refresh favorite button");
+    }
+  }
+}
+
 async function handleNotifyToggleCallback(
   callbackQuery: TelegramCallbackQuery,
   message: TelegramMessage,
@@ -1577,6 +1651,17 @@ async function handleCallbackQueryInner(
 
   if (!(await requireSubscription(chatId, userId))) {
     await answerCallbackQuery(callbackQuery.id);
+    return;
+  }
+
+  if (data === "fav:list") {
+    await answerCallbackQuery(callbackQuery.id);
+    await sendFavorites(chatId);
+    return;
+  }
+
+  if (data.startsWith("fav:")) {
+    await handleFavoriteToggleCallback(callbackQuery, message, chatId);
     return;
   }
 
@@ -2614,6 +2699,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
 
       await sendText(chatId, welcomeLines.join("\n"), getStartKeyboard());
+      return;
+    }
+
+    if (command === "/fav") {
+      await sendFavorites(chatId);
       return;
     }
 
