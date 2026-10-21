@@ -909,16 +909,29 @@ export function listRecentEpisodes(limit = 5): Array<{
   }));
 }
 
-function resolveContentId(kind: "movie" | "series", code: string): number | null {
+type FavoriteKind = "movie" | "series" | "episode";
+
+/** `ref`: kino/serial uchun kod, qism uchun ID raqami (matn ko'rinishida). */
+function resolveContentId(kind: FavoriteKind, ref: string): number | null {
+  if (kind === "episode") {
+    if (!/^\d{1,12}$/.test(ref)) {
+      return null;
+    }
+    const row = database
+      .prepare("SELECT id FROM series_episodes WHERE id = ?")
+      .get(Number(ref)) as { id: number } | undefined;
+    return row ? Number(row.id) : null;
+  }
+
   const table = kind === "movie" ? "movies" : "series";
   const row = database
     .prepare(`SELECT id FROM ${table} WHERE code = ?`)
-    .get(code) as { id: number } | undefined;
+    .get(ref) as { id: number } | undefined;
   return row ? Number(row.id) : null;
 }
 
-export function isFavorite(chatId: number, kind: "movie" | "series", code: string): boolean {
-  const contentId = resolveContentId(kind, code);
+export function isFavorite(chatId: number, kind: FavoriteKind, ref: string): boolean {
+  const contentId = resolveContentId(kind, ref);
   if (contentId === null) {
     return false;
   }
@@ -929,18 +942,18 @@ export function isFavorite(chatId: number, kind: "movie" | "series", code: strin
   );
 }
 
-/** Sevimlini almashtiradi: yangi holat (true = sevimli), kod topilmasa null. */
+/** Sevimlini almashtiradi: yangi holat (true = sevimli), topilmasa null. */
 export function toggleFavorite(
   chatId: number,
-  kind: "movie" | "series",
-  code: string,
+  kind: FavoriteKind,
+  ref: string,
 ): boolean | null {
-  const contentId = resolveContentId(kind, code);
+  const contentId = resolveContentId(kind, ref);
   if (contentId === null) {
     return null;
   }
 
-  if (isFavorite(chatId, kind, code)) {
+  if (isFavorite(chatId, kind, ref)) {
     database
       .prepare("DELETE FROM favorites WHERE chat_id = ? AND kind = ? AND content_id = ?")
       .run(chatId, kind, contentId);
@@ -953,10 +966,11 @@ export function toggleFavorite(
   return true;
 }
 
+/** Qism uchun `code` — qism ID raqami, `title` — "SERIAL — 1-fasl 5-qism". */
 export function listFavorites(
   chatId: number,
   limit = 50,
-): Array<{ kind: "movie" | "series"; code: string; title: string }> {
+): Array<{ kind: FavoriteKind; code: string; title: string }> {
   const rows = database
     .prepare(
       `SELECT kind, code, title FROM (
@@ -967,11 +981,20 @@ export function listFavorites(
          SELECT 'series', series.code, series.title, favorites.rowid
          FROM favorites INNER JOIN series ON series.id = favorites.content_id
          WHERE favorites.chat_id = ? AND favorites.kind = 'series'
+         UNION ALL
+         SELECT 'episode', CAST(series_episodes.id AS TEXT),
+                series.title || ' — ' || series_episodes.season_number || '-fasl ' ||
+                series_episodes.episode_number || '-qism',
+                favorites.rowid
+         FROM favorites
+         INNER JOIN series_episodes ON series_episodes.id = favorites.content_id
+         INNER JOIN series ON series.id = series_episodes.series_id
+         WHERE favorites.chat_id = ? AND favorites.kind = 'episode'
        ) ORDER BY ord DESC LIMIT ?`,
     )
-    .all(chatId, chatId, limit) as Array<{ kind: string; code: string; title: string }>;
+    .all(chatId, chatId, chatId, limit) as Array<{ kind: string; code: string; title: string }>;
   return rows.map((row) => ({
-    kind: row.kind === "series" ? "series" : "movie",
+    kind: row.kind === "series" ? "series" : row.kind === "episode" ? "episode" : "movie",
     code: String(row.code),
     title: String(row.title),
   }));

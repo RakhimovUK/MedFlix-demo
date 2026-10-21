@@ -1071,9 +1071,14 @@ async function deliverSeriesEpisode(
     listSeriesEpisodes(seriesCode),
     episode.id,
   );
-  const navigationRows = neighbors
-    ? buildEpisodeNavigationRows(neighbors, episode.id)
-    : [];
+  const navigationRows = [
+    ...(neighbors ? buildEpisodeNavigationRows(neighbors, episode.id) : []),
+    buildFavoriteRow(
+      "episode",
+      String(episode.id),
+      isFavorite(chatId, "episode", String(episode.id)),
+    ),
+  ];
 
   const deliveredMessageId = await deliverChannelPost(
     chatId,
@@ -1496,9 +1501,13 @@ async function handleFavoriteToggleCallback(
   chatId: number,
 ): Promise<void> {
   const parsed = parseFavoriteData(callbackQuery.data ?? "");
-  const code = parsed ? decodeCallbackValue(parsed.encoded) : null;
-  const state = parsed && code ? toggleFavorite(chatId, parsed.kind, code) : null;
-  if (!parsed || !code || state === null) {
+  const ref = parsed
+    ? parsed.kind === "episode"
+      ? parsed.encoded
+      : decodeCallbackValue(parsed.encoded)
+    : null;
+  const state = parsed && ref ? toggleFavorite(chatId, parsed.kind, ref) : null;
+  if (!parsed || !ref || state === null) {
     await answerCallbackQuery(callbackQuery.id, "Topilmadi.");
     return;
   }
