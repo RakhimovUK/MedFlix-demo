@@ -7,6 +7,7 @@ import {
   deleteSeries,
   deleteSeriesEpisode,
   findMovie,
+  getDatabase,
   getLastDeliveredEpisodeMessage,
   setLastDeliveredEpisodeMessage,
   listMoviePosts,
@@ -77,6 +78,7 @@ import {
   getAdminIds,
   getDiscussionUrl,
   getPostsChannelId,
+  getRequestsTopic,
   getRequiredSubscriptions,
   isAdmin,
 } from "./config";
@@ -125,6 +127,9 @@ import {
 import { runBroadcast } from "./broadcast";
 import { createKeyedQueue } from "./keyed-queue";
 import { copyContentsPosts } from "./contents-delivery";
+import { createRequestsStore } from "./requests-store";
+import { createRequestFlow } from "./request-flow";
+import { checkRequestText, describeGuardReason } from "./request-guard";
 import { logger } from "../lib/logger";
 
 type TelegramUser = {
@@ -157,6 +162,7 @@ type TelegramMessage = {
   forward_from_message_id?: number;
   reply_to_message?: TelegramMessage;
   reply_markup?: ReplyMarkup;
+  message_thread_id?: number;
 };
 
 type TelegramCallbackQuery = {
@@ -186,6 +192,18 @@ const navCleanup = createNavCleanup(async (chatId, messageId) => {
 const { apiUrl, telegramApi, sendText, answerCallbackQuery } = createTelegramApi({
   token,
   onOutgoing: (chatId) => navCleanup.noteSent(chatId),
+});
+// So'rovlar: TELEGRAM_REQUESTS_TOPIC_LINK bo'lsa admin guruh topigiga, bo'lmasa adminlarga shaxsiy xabar.
+const requestsTopic = getRequestsTopic();
+const requestFlow = createRequestFlow({
+  api: (method, body) => telegramApi(method, body),
+  store: createRequestsStore(getDatabase()),
+  target: requestsTopic
+    ? { chatId: String(requestsTopic.chatId), threadId: requestsTopic.threadId }
+    : null,
+  adminIds: getAdminIds,
+  isAdmin,
+  log: (message, err) => logger.warn({ err }, message),
 });
 const pendingBroadcasts = new Map<
   string,
@@ -573,6 +591,7 @@ async function configureBotCommands(): Promise<void> {
       { command: "top", description: "Eng ko‘p ko‘rilganlar" },
       { command: "mysubs", description: "Yangi qism xabarlarim" },
       { command: "fav", description: "Sevimlilarim" },
+      { command: "request", description: "Kino so‘rash (topilmagan kino)" },
     ],
   });
 
@@ -584,6 +603,7 @@ async function configureBotCommands(): Promise<void> {
     { command: "top", description: "Eng ko‘p ko‘rilganlar" },
     { command: "mysubs", description: "Yangi qism xabarlarim" },
     { command: "fav", description: "Sevimlilarim" },
+    { command: "request", description: "Kino so‘rash (topilmagan kino)" },
     { command: "add", description: "Kanal postidan kino qo‘shish" },
     { command: "addpost", description: "Kinoga qo‘shimcha post qo‘shish" },
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },
@@ -1625,6 +1645,19 @@ async function handleCallbackQueryInner(
   const userId = callbackQuery.from.id;
   const data = callbackQuery.data ?? "";
 
+  if (data.startsWith("rq:")) {
+    await requestFlow.handleCallback({
+      id: callbackQuery.id,
+      fromId: userId,
+      fromName: displayName(callbackQuery.from),
+      data,
+      chatId,
+      messageId: message.message_id,
+      threadId: message.message_thread_id ?? null,
+    });
+    return;
+  }
+
   if (data.startsWith("bc:")) {
     await handleBroadcastCallback(callbackQuery, message);
     return;
@@ -1811,6 +1844,9 @@ async function handleIdCommand(ctx: CommandContext): Promise<void> {
     [
       `Sizning Telegram ID raqamingiz: ${userId}`,
       `Admin holati: ${isAdmin(userId) ? "tasdiqlangan" : "tasdiqlanmagan"}`,
+      ...(isAdmin(userId) && chatId < 0
+        ? [`Chat ID: ${chatId}`, `Topic ID: ${message.message_thread_id ?? "yo‘q"}`]
+        : []),
     ].join("\n"),
   );
   return;
@@ -1859,6 +1895,74 @@ async function handleSearchCommand(ctx: CommandContext): Promise<void> {
     `«${args}» bo‘yicha qidiruv natijalari:`,
   );
   return;
+}
+
+function displayName(user: TelegramUser | undefined): string {
+  if (!user) return "";
+  const parts = [user.first_name ?? "", user.username ? `(@${user.username})` : ""];
+  return parts.filter(Boolean).join(" ");
+}
+
+/** Foydalanuvchi so'rovini tekshiradi (spam), adminlarga yuboradi va foydalanuvchiga javob beradi. */
+async function submitUserRequest(
+  chatId: number,
+  user: { id: number; name: string },
+  text: string,
+  queryNorm: string,
+  auto: boolean,
+): Promise<void> {
+  const guard = checkRequestText(text);
+  if (!guard.ok) {
+    await sendText(chatId, describeGuardReason(guard.reason));
+    return;
+  }
+
+  const result = await requestFlow.submit({
+    userId: user.id,
+    userName: user.name,
+    query: text,
+    queryNorm,
+  });
+
+  if (result.status === "duplicate") {
+    await sendText(
+      chatId,
+      "Bu so‘rovingiz adminlarga allaqachon yuborilgan. Javobni kuting — natija shu botga keladi.",
+    );
+    return;
+  }
+  if (result.status === "limited") {
+    await sendText(
+      chatId,
+      "Bugungi so‘rovlar limitiga yetdingiz. Ertaga qayta urinib ko‘ring.",
+    );
+    return;
+  }
+  if (!result.delivered) {
+    notifyAdminsOfError(
+      "So‘rovni adminlarga yuborish",
+      new Error(`So‘rov #${result.id} saqlandi, lekin guruh/adminlarga yetmadi`),
+    );
+  }
+  await sendText(
+    chatId,
+    auto
+      ? "Afsuski, bu kino topilmadi, lekin so‘rovingiz adminlarga yuborildi. Admin javobi shu botga keladi."
+      : `✅ So‘rovingiz adminlarga yuborildi: «${text}». Javob shu botga keladi.`,
+  );
+}
+
+async function handleRequestCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, message, args } = ctx;
+  if (!args) {
+    await sendText(
+      chatId,
+      ["Format: /request Kino nomi", "Masalan: /request Oltin qo‘llar"].join("\n"),
+    );
+    return;
+  }
+  const queryNorm = args.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  await submitUserRequest(chatId, { id: userId, name: displayName(message.from) }, args, queryNorm, false);
 }
 
 async function handleSetstartCommand(ctx: CommandContext): Promise<void> {
@@ -2596,6 +2700,27 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
+  // So'rovlar guruhi/topici: admin izohlari. Guruhdagi oddiy suhbat qidiruvga tushmasin.
+  if (
+    text &&
+    (requestFlow.isTargetChat(chatId) || requestFlow.hasPendingComment(userId))
+  ) {
+    const consumed = await requestFlow.handleMessage({
+      chatId,
+      fromId: userId,
+      text,
+      messageId: message.message_id,
+      replyToMessageId: message.reply_to_message?.message_id,
+      threadId: message.message_thread_id ?? null,
+    });
+    if (consumed) {
+      return;
+    }
+  }
+  if (requestFlow.isTargetChat(chatId) && !text.startsWith("/")) {
+    return;
+  }
+
   const forwardedPost = getForwardedChannelPost(message);
 
   const pendingPoster = pendingPosterRequests.get(String(userId));
@@ -2738,6 +2863,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
     if (command === "/catalog") {
       await handleCatalogCommand(ctx);
+      return;
+    }
+
+    if (command === "/request") {
+      await handleRequestCommand(ctx);
       return;
     }
 

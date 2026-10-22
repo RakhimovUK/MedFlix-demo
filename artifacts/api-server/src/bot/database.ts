@@ -48,6 +48,11 @@ mkdirSync(path.dirname(databasePath), { recursive: true });
 
 const database = new DatabaseSync(databasePath);
 
+/** Qo'shimcha saqlash qatlamlari (requests-store.ts, search-store.ts) shu bazadan foydalanadi. */
+export function getDatabase(): DatabaseSync {
+  return database;
+}
+
 database.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
