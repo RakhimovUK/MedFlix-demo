@@ -130,6 +130,9 @@ import { copyContentsPosts } from "./contents-delivery";
 import { createRequestsStore } from "./requests-store";
 import { createRequestFlow } from "./request-flow";
 import { parsePostText } from "./post-parser";
+import { createSearchStore } from "./search-store";
+import { createAliasLearner } from "./alias-learning";
+import { groupHits, looksLikeCode, normalizeText, smartSearch } from "./smart-search";
 import { checkRequestText, describeGuardReason } from "./request-guard";
 import { logger } from "../lib/logger";
 
@@ -193,6 +196,10 @@ const navCleanup = createNavCleanup(async (chatId, messageId) => {
 const { apiUrl, telegramApi, sendText, answerCallbackQuery } = createTelegramApi({
   token,
   onOutgoing: (chatId) => navCleanup.noteSent(chatId),
+});
+const searchStore = createSearchStore(getDatabase());
+const aliasLearner = createAliasLearner({
+  bump: (aliasNorm, kind, code) => searchStore.bumpAlias(aliasNorm, kind, code),
 });
 // So'rovlar: TELEGRAM_REQUESTS_TOPIC_LINK bo'lsa admin guruh topigiga, bo'lmasa adminlarga shaxsiy xabar.
 const requestsTopic = getRequestsTopic();
@@ -392,6 +399,8 @@ function formatStructurePost(): string {
     "• /stats — foydalanuvchilar va kontent statistikasi",
     "• /broadcast — xabarga reply qilib: hammaga yuborish (/broadcast test — sinov)",
     "• /genre KOD | Janr 1, Janr 2",
+    "• /alias KOD | so‘z — qidiruvga muqobil so‘z qo‘shish (/alias KOD — ro‘yxat)",
+    "• /delalias KOD | so‘z — muqobil so‘zni o‘chirish",
     "• /setstart",
     "• /setstructure POST_LINK",
     "• /setcontents POST_LINK",
@@ -620,6 +629,8 @@ async function configureBotCommands(): Promise<void> {
     { command: "delposter", description: "Kino/serial posterini o‘chirish" },
     { command: "getposter", description: "Kino/serial posteri holatini ko‘rish" },
     { command: "genre", description: "Kino janrini belgilash" },
+    { command: "alias", description: "Qidiruvga muqobil so‘z qo‘shish" },
+    { command: "delalias", description: "Muqobil so‘zni o‘chirish" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
     { command: "setcontents", description: "Mundarija postini sozlash" },
@@ -755,7 +766,7 @@ async function sendCatalog(chatId: number): Promise<void> {
 
 async function sendMovieResults(
   chatId: number,
-  movies: ReturnType<typeof listMovies>,
+  movies: Array<{ code: string; title: string }>,
   heading: string,
 ): Promise<void> {
   if (movies.length === 0) {
@@ -1760,6 +1771,7 @@ async function handleCallbackQueryInner(
       await sendText(chatId, "Kino kodi ma’lumotini o‘qib bo‘lmadi.");
       return;
     }
+    aliasLearner.onSelect(chatId, "movie", code);
     await deliverMovie(chatId, findMovie(code));
     return;
   }
@@ -1770,6 +1782,7 @@ async function handleCallbackQueryInner(
       await sendText(chatId, "Serial kodi ma’lumotini o‘qib bo‘lmadi.");
       return;
     }
+    aliasLearner.onSelect(chatId, "series", code);
     await sendSeriesEpisodes(chatId, code);
     return;
   }
@@ -1881,21 +1894,100 @@ async function handleSearchCommand(ctx: CommandContext): Promise<void> {
     return;
   }
 
-  const seriesMatches = searchSeries(args);
-  if (seriesMatches.length > 0) {
-    await sendSeriesResults(
-      chatId,
-      seriesMatches,
-      `«${args}» bo‘yicha seriallar:`,
-    );
-  }
-
-  await sendMovieResults(
+  await runSmartSearch(
     chatId,
-    searchMovies(args),
-    `«${args}» bo‘yicha qidiruv natijalari:`,
+    args,
+    "Kino topilmadi. Kod yoki nomni tekshirib qayta yuboring.",
   );
   return;
+}
+
+/** Hech narsa topilmaganda javob (5-bosqichda shu yerdan avtomatik /request ketadi). */
+async function handleNothingFound(
+  chatId: number,
+  _query: string,
+  notFoundText: string,
+): Promise<void> {
+  await sendText(chatId, notFoundText);
+}
+
+/**
+ * Ko'p parametrli qidiruv: nom (to'liq/qisman) -> janr -> imlo xatosi bilan o'xshash nomlar.
+ * Kodlar bo'yicha aniq moslik chaqiruvchida allaqachon tekshirilgan.
+ */
+async function runSmartSearch(
+  chatId: number,
+  query: string,
+  notFoundText: string,
+): Promise<void> {
+  const grouped = groupHits(
+    smartSearch(query, searchStore.listSearchCatalog(), searchStore.listAliases()),
+  );
+  const { primary, genre, fuzzy } = grouped;
+
+  // Imlo xatosi bilan topilgan bo'lsa, foydalanuvchi tanlovini alias sifatida o'rganamiz.
+  if (fuzzy.length > 0 && !looksLikeCode(query)) {
+    aliasLearner.remember(
+      chatId,
+      normalizeText(query),
+      fuzzy.map((hit) => `${hit.kind}:${hit.code}`),
+    );
+  } else {
+    aliasLearner.forget(chatId);
+  }
+
+  if (primary.length === 0 && genre.length === 0 && fuzzy.length === 0) {
+    await handleNothingFound(chatId, query, notFoundText);
+    return;
+  }
+
+  // Bitta aniq natija bo'lsa, to'g'ridan-to'g'ri yuboramiz.
+  if (primary.length === 1 && genre.length === 0) {
+    const only = primary[0]!;
+    if (only.kind === "series") {
+      await sendSeriesEpisodes(chatId, only.code);
+    } else {
+      const movie = findMovie(only.code);
+      if (movie) await deliverMovie(chatId, movie);
+    }
+    return;
+  }
+
+  const sendGroup = async (
+    hits: typeof primary,
+    movieHeading: string,
+    seriesHeading: string,
+  ) => {
+    const seriesList = hits
+      .filter((hit) => hit.kind === "series")
+      .map((hit) => findSeries(hit.code))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (seriesList.length > 0) {
+      await sendSeriesResults(chatId, seriesList, seriesHeading);
+    }
+    const movieList = hits.filter((hit) => hit.kind === "movie");
+    if (movieList.length > 0) {
+      await sendMovieResults(chatId, movieList, movieHeading);
+    }
+  };
+
+  if (primary.length > 0) {
+    await sendGroup(
+      primary,
+      `«${query}» bo‘yicha topilgan materiallar:`,
+      `«${query}» bo‘yicha seriallar:`,
+    );
+  }
+  if (genre.length > 0) {
+    await sendGroup(
+      genre,
+      `🎭 «${query}» janridagi kinolar:`,
+      `🎭 «${query}» janridagi seriallar:`,
+    );
+  }
+  if (fuzzy.length > 0) {
+    await sendGroup(fuzzy, "Shuni nazarda tutdingizmi?", "Shuni nazarda tutdingizmi?");
+  }
 }
 
 function displayName(user: TelegramUser | undefined): string {
@@ -2495,6 +2587,102 @@ async function handleGenreCommand(ctx: CommandContext): Promise<void> {
   return;
 }
 
+/** Kod bo'yicha kino yoki serialni topadi (alias uchun). */
+function resolveAliasTarget(
+  rawCode: string,
+): { kind: "movie" | "series"; code: string; title: string } | null {
+  const code = normalizeCode(rawCode);
+  if (!code) return null;
+  const series = findSeries(code);
+  if (series) return { kind: "series", code: series.code, title: series.title };
+  const movie = findMovie(code);
+  if (movie) return { kind: "movie", code: movie.code, title: movie.title };
+  return null;
+}
+
+async function handleAliasCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, args } = ctx;
+  const [rawCode, rawWords] = args.split("|").map((value) => value.trim());
+  if (!rawCode) {
+    await sendText(
+      chatId,
+      [
+        "Format: /alias KOD | so‘z",
+        "Masalan: /alias 101 | garri poter, harry potter",
+        "Ro‘yxat: /alias KOD",
+      ].join("\n"),
+    );
+    return;
+  }
+  const target = resolveAliasTarget(rawCode);
+  if (!target) {
+    await sendText(chatId, `${rawCode} kodi topilmadi.`);
+    return;
+  }
+
+  if (!rawWords) {
+    const aliases = searchStore.listAliasesForCode(target.kind, target.code);
+    await sendText(
+      chatId,
+      aliases.length === 0
+        ? `${target.code} — ${target.title}: muqobil so‘zlar yo‘q.`
+        : [
+            `${target.code} — ${target.title}: muqobil so‘zlar:`,
+            ...aliases.map(
+              (alias) =>
+                `• ${alias.aliasNorm}${alias.hits >= 100 ? "" : ` (avto, ${alias.hits} marta)`}`,
+            ),
+          ].join("\n"),
+    );
+    return;
+  }
+
+  const saved: string[] = [];
+  const rejected: string[] = [];
+  for (const word of rawWords.split(/[,;]+/u).map((value) => value.trim()).filter(Boolean)) {
+    const aliasNorm = normalizeText(word);
+    if (!aliasNorm || looksLikeCode(word)) {
+      rejected.push(word);
+      continue;
+    }
+    searchStore.setAlias(aliasNorm, target.kind, target.code);
+    saved.push(aliasNorm);
+  }
+  await sendText(
+    chatId,
+    [
+      saved.length > 0
+        ? `✅ ${target.code} — ${target.title}: «${saved.join("», «")}» endi shu kinoni topadi.`
+        : "Hech narsa saqlanmadi.",
+      ...(rejected.length > 0
+        ? [`Qabul qilinmadi (bo‘sh yoki kod ko‘rinishida): ${rejected.join(", ")}`]
+        : []),
+    ].join("\n"),
+  );
+}
+
+async function handleDelaliasCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, args } = ctx;
+  const [rawCode, rawWord] = args.split("|").map((value) => value.trim());
+  if (!rawCode || !rawWord) {
+    await sendText(chatId, "Format: /delalias KOD | so‘z\nRo‘yxat: /alias KOD");
+    return;
+  }
+  const target = resolveAliasTarget(rawCode);
+  if (!target) {
+    await sendText(chatId, `${rawCode} kodi topilmadi.`);
+    return;
+  }
+  const aliasNorm = normalizeText(rawWord);
+  const removed = searchStore.removeAlias(aliasNorm, target.kind, target.code);
+  await sendText(
+    chatId,
+    removed
+      ? `🗑 «${aliasNorm}» muqobil so‘zi ${target.code} dan o‘chirildi.`
+      : `«${aliasNorm}» ${target.code} uchun topilmadi. Ro‘yxat: /alias ${target.code}`,
+  );
+}
+
 async function handleDeleteCommand(ctx: CommandContext): Promise<void> {
   const { chatId, userId, message, text, command, args } = ctx;
   const code = normalizeCode(args);
@@ -2931,6 +3119,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/delposter" ||
         command === "/getposter" ||
         command === "/genre" ||
+        command === "/alias" ||
+        command === "/delalias" ||
         command === "/setstart" ||
         command === "/setstructure" ||
         command === "/setcontents" ||
@@ -3027,6 +3217,16 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       return;
     }
 
+    if (command === "/alias") {
+      await handleAliasCommand(ctx);
+      return;
+    }
+
+    if (command === "/delalias") {
+      await handleDelaliasCommand(ctx);
+      return;
+    }
+
     if (command === "/delete") {
       await handleDeleteCommand(ctx);
       return;
@@ -3069,32 +3269,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
-  const seriesMatches = searchSeries(text);
-  if (seriesMatches.length === 1) {
-    await sendSeriesEpisodes(chatId, seriesMatches[0].code);
-    return;
-  }
-
-  if (seriesMatches.length > 1) {
-    await sendSeriesResults(
-      chatId,
-      seriesMatches,
-      `«${text}» bo‘yicha seriallar:`,
-    );
-  }
-
-  const matches = searchMovies(text);
-  if (matches.length === 1) {
-    await deliverMovie(chatId, matches[0]);
-    return;
-  }
-
-  await sendMovieResults(
+  await runSmartSearch(
     chatId,
-    matches,
-    matches.length > 1
-      ? `«${text}» bo‘yicha topilgan materiallar:`
-      : "Bu kod yoki nom bo‘yicha kino topilmadi. Qayta tekshirib ko‘ring.",
+    text,
+    "Bu kod yoki nom bo‘yicha kino topilmadi. Qayta tekshirib ko‘ring.",
   );
 }
 
