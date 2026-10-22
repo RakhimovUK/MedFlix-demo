@@ -129,6 +129,7 @@ import { createKeyedQueue } from "./keyed-queue";
 import { copyContentsPosts } from "./contents-delivery";
 import { createRequestsStore } from "./requests-store";
 import { createRequestFlow } from "./request-flow";
+import { parsePostText } from "./post-parser";
 import { checkRequestText, describeGuardReason } from "./request-guard";
 import { logger } from "../lib/logger";
 
@@ -181,7 +182,7 @@ type TelegramUpdate = {
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const pendingForwardedPosts = new Map<
   string,
-  { channelChatId: string; channelMessageId: number }
+  { channelChatId: string; channelMessageId: number; text?: string }
 >();
 const pendingPosterRequests = new Map<string, { code: string; expiresAt: number }>();
 
@@ -2581,7 +2582,6 @@ async function handleAddCommand(ctx: CommandContext): Promise<void> {
     .split("|")
     .map((value) => value.trim());
   const code = normalizeCode(rawCode ?? "");
-  const title = rawTitle ?? "";
 
   if (code && findSeries(code)) {
     await sendText(
@@ -2596,6 +2596,14 @@ async function handleAddCommand(ctx: CommandContext): Promise<void> {
   const channelChatId = rawChatId || referencedForward?.channelChatId || "";
   const channelMessageId =
     Number(rawMessageId) || referencedForward?.channelMessageId || 0;
+  // Post matnidan nom va janr avtomatik olinadi; /add KOD | Nom berilsa, nom foydalanuvchiniki.
+  const parsedPost = parsePostText(
+    (referencedForward as { text?: string } | undefined)?.text ||
+      message.reply_to_message?.caption ||
+      message.reply_to_message?.text ||
+      message.caption,
+  );
+  const title = rawTitle || parsedPost.title || "";
 
   if (
     !code ||
@@ -2608,10 +2616,12 @@ async function handleAddCommand(ctx: CommandContext): Promise<void> {
     await sendText(
       chatId,
       [
-        "Format noto‘g‘ri.",
+        title || !code
+          ? "Format noto‘g‘ri."
+          : "Postdan kino nomini aniqlab bo‘lmadi. Nomini o‘zingiz yozing.",
         "Tavsiya etilgan usul:",
         "1. Kanal postini botga forward qiling.",
-        "2. /add 101 | Interstellar",
+        "2. /add 101 (nom va janr postdan olinadi) yoki /add 101 | Interstellar",
         "",
         "Eski usul:",
         "/add 101 | Interstellar | -1001234567890 | 42",
@@ -2627,8 +2637,29 @@ async function handleAddCommand(ctx: CommandContext): Promise<void> {
     channelMessageId,
   });
   pendingForwardedPosts.delete(String(userId));
+
+  // Janr postdan avtomatik saqlanadi (mavjud janr nomining yozilishi saqlanadi).
+  let savedGenres: string[] = [];
+  if (parsedPost.genres.length > 0) {
+    const known = new Map(
+      listGenres().map((genre) => [genre.name.toLocaleLowerCase("uz"), genre.name]),
+    );
+    savedGenres = parsedPost.genres.map(
+      (genre) => known.get(genre.toLocaleLowerCase("uz")) ?? genre,
+    );
+    setMovieGenres(movie.code, savedGenres);
+  }
+
   await refreshStructurePost();
-  await sendText(chatId, `${movie.code} — ${movie.title} bazaga saqlandi.`);
+  await sendText(
+    chatId,
+    [
+      `${movie.code} — ${movie.title} bazaga saqlandi.`,
+      savedGenres.length > 0
+        ? `🎭 Janr: ${savedGenres.join(", ")}`
+        : `Janr aniqlanmadi. Kerak bo‘lsa: /genre ${movie.code} | Janr 1, Janr 2`,
+    ].join("\n"),
+  );
   return;
 }
 
@@ -2745,21 +2776,28 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
   }
   if (forwardedPost && isAdmin(userId) && !text.startsWith("/")) {
-    pendingForwardedPosts.set(String(userId), forwardedPost);
+    const postText = message.caption ?? message.text ?? "";
+    const detected = parsePostText(postText);
+    pendingForwardedPosts.set(String(userId), { ...forwardedPost, text: postText });
     await sendText(
       chatId,
       [
         "Kanal posti qabul qilindi.",
         `Kanal ID: ${forwardedPost.channelChatId}`,
         `Post ID: ${forwardedPost.channelMessageId}`,
+        detected.title
+          ? `Aniqlandi: ${[detected.title, ...(detected.genres.length > 0 ? [detected.genres.join(", ")] : [])].join(", ")}`
+          : "Nom aniqlanmadi — /add KOD | Kino nomi deb yozing.",
         "",
         "Endi shu chatga quyidagicha yuboring:",
+        "/add KOD  (nom va janr postdan olinadi)",
         "/add KOD | Kino nomi",
         "/addpost KOD | 2 | Kino fayli",
         "/addpart SERIAL_KOD | FASL | QISM | Qism nomi",
         "yoki /setstart — shu postni start videosi qilish",
         "",
-        "Masalan: /add 101 | Interstellar",
+        "Masalan: /add 101",
+        "Xato aniqlangan bo‘lsa: /genre KOD | Janr 1, Janr 2",
       ].join("\n"),
     );
     return;
