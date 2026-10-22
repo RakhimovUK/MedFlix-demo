@@ -1898,17 +1898,27 @@ async function handleSearchCommand(ctx: CommandContext): Promise<void> {
     chatId,
     args,
     "Kino topilmadi. Kod yoki nomni tekshirib qayta yuboring.",
+    { id: userId, name: displayName(message.from) },
   );
   return;
 }
 
-/** Hech narsa topilmaganda javob (5-bosqichda shu yerdan avtomatik /request ketadi). */
+/**
+ * Hech narsa topilmaganda: haqiqiy kino nomiga o'xshasa, so'rov avtomatik adminlarga ketadi.
+ * Kod ko'rinishidagi matn, salomlashuv, havola, juda qisqa/uzun matn so'rov bo'lmaydi —
+ * ularga oddiy "topilmadi" xabari beriladi.
+ */
 async function handleNothingFound(
   chatId: number,
-  _query: string,
+  query: string,
   notFoundText: string,
+  requester?: { id: number; name: string },
 ): Promise<void> {
-  await sendText(chatId, notFoundText);
+  if (!requester || !checkRequestText(query).ok) {
+    await sendText(chatId, notFoundText);
+    return;
+  }
+  await submitUserRequest(chatId, requester, query.trim(), normalizeText(query), true);
 }
 
 /**
@@ -1919,6 +1929,7 @@ async function runSmartSearch(
   chatId: number,
   query: string,
   notFoundText: string,
+  requester?: { id: number; name: string },
 ): Promise<void> {
   const grouped = groupHits(
     smartSearch(query, searchStore.listSearchCatalog(), searchStore.listAliases()),
@@ -1937,7 +1948,7 @@ async function runSmartSearch(
   }
 
   if (primary.length === 0 && genre.length === 0 && fuzzy.length === 0) {
-    await handleNothingFound(chatId, query, notFoundText);
+    await handleNothingFound(chatId, query, notFoundText, requester);
     return;
   }
 
@@ -2020,14 +2031,14 @@ async function submitUserRequest(
   if (result.status === "duplicate") {
     await sendText(
       chatId,
-      "Bu so‘rovingiz adminlarga allaqachon yuborilgan. Javobni kuting — natija shu botga keladi.",
+      `${auto ? "Bu kino hali topilmadi. " : ""}Bu so‘rovingiz adminlarga allaqachon yuborilgan. Javobni kuting — natija shu botga keladi.`,
     );
     return;
   }
   if (result.status === "limited") {
     await sendText(
       chatId,
-      "Bugungi so‘rovlar limitiga yetdingiz. Ertaga qayta urinib ko‘ring.",
+      `${auto ? "Afsuski, bu kino topilmadi. " : ""}Bugungi so‘rovlar limitiga yetdingiz. Ertaga qayta urinib ko‘ring.`,
     );
     return;
   }
@@ -2054,7 +2065,7 @@ async function handleRequestCommand(ctx: CommandContext): Promise<void> {
     );
     return;
   }
-  const queryNorm = args.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const queryNorm = normalizeText(args);
   await submitUserRequest(chatId, { id: userId, name: displayName(message.from) }, args, queryNorm, false);
 }
 
@@ -3273,6 +3284,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     chatId,
     text,
     "Bu kod yoki nom bo‘yicha kino topilmadi. Qayta tekshirib ko‘ring.",
+    { id: userId, name: displayName(message.from) },
   );
 }
 
