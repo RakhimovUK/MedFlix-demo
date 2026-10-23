@@ -62,6 +62,7 @@ import {
   handleListCommand,
   handlePosterCommand,
   handleSetcontentsCommand,
+  handleSetpubcontentsCommand,
   handleSetposterCommand,
   handleSetstartCommand,
   handleSetstructureCommand,
@@ -284,6 +285,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/setstart" ||
         command === "/setstructure" ||
         command === "/setcontents" ||
+        command === "/setpubcontents" ||
         command === "/delete" ||
         command === "/deleteseries" ||
         command === "/deletepart" ||
@@ -314,6 +316,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
     if (command === "/setcontents") {
       await handleSetcontentsCommand(ctx);
+      return;
+    }
+
+    if (command === "/setpubcontents") {
+      await handleSetpubcontentsCommand(ctx);
       return;
     }
 

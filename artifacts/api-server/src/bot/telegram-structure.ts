@@ -7,6 +7,7 @@ import {
 import { getPostsChannelId, getRequiredSubscriptions } from "./config";
 import { getSetting, listGenres, listMovies, listSeries } from "./database";
 import { logger } from "../lib/logger";
+import { parseStoredPostRefs } from "./contents-delivery";
 import { botInfo, telegramApi } from "./telegram-state";
 
 /** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
@@ -73,6 +74,14 @@ export function getContentsPostReferences(): TelegramPostReference[] {
   }
 
   return defaultContentsPosts;
+}
+
+/** Ochiq (public) kanaldagi mundarija postlari: /setpubcontents yoki PUBLIC_CONTENTS_POST_LINKS. */
+export function getPublicContentsPostReferences(): TelegramPostReference[] {
+  return (
+    parseStoredPostRefs(getSetting("public_contents_posts")) ??
+    readPostLinksFromEnv("PUBLIC_CONTENTS_POST_LINKS")
+  );
 }
 
 export function formatStructurePost(): string {
@@ -153,9 +162,30 @@ export function formatStructurePost(): string {
 }
 
 export async function refreshContentsPost(): Promise<boolean> {
-  const refs = getContentsPostReferences();
-  const structure = getStructurePostReference();
   const pages = buildContentsPages(listMovies(), listSeries(), botInfo.username);
+  const baseOk = await updateContentsPosts(
+    getContentsPostReferences(),
+    pages,
+    getStructurePostReference(),
+  );
+  // Har bir ochiq kanal alohida: uning postlari sahifa tartibida to'ldiriladi (hammasida bir xil mundarija).
+  const publicRefs = getPublicContentsPostReferences();
+  let publicOk = true;
+  for (const chat of Array.from(new Set(publicRefs.map((ref) => ref.chatId)))) {
+    const group = publicRefs.filter((ref) => ref.chatId === chat);
+    if (!(await updateContentsPosts(group, pages))) {
+      publicOk = false;
+    }
+  }
+  return baseOk && publicOk;
+}
+
+/** Berilgan postlarni sahifalar bilan tahrirlaydi. structure — tizim posti (o'tkazib yuboriladi). */
+async function updateContentsPosts(
+  refs: TelegramPostReference[],
+  pages: string[],
+  structure?: TelegramPostReference,
+): Promise<boolean> {
   const dropped = Math.max(0, pages.length - refs.length);
   let allOk = true;
 
@@ -169,6 +199,7 @@ export async function refreshContentsPost(): Promise<boolean> {
   for (let index = 0; index < refs.length; index += 1) {
     const reference = refs[index];
     if (
+      structure &&
       reference.chatId === structure.chatId &&
       reference.messageId === structure.messageId
     ) {

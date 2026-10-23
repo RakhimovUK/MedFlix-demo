@@ -47,6 +47,7 @@ import {
 import {
   contentsCache,
   getContentsPostReferences,
+  getPublicContentsPostReferences,
   getStructurePostReference,
   refreshContentsPost,
   refreshStructurePost,
@@ -114,6 +115,48 @@ export async function handleSetstructureCommand(ctx: CommandContext): Promise<vo
       : "Post manzili saqlandi, lekin hozircha tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
   );
   return;
+}
+
+export async function handleSetpubcontentsCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, args } = ctx;
+  if (args.trim().toLowerCase() === "off") {
+    setSetting("public_contents_posts", "[]");
+    contentsCache.clear();
+    await sendText(chatId, "Ochiq kanal mundarijasi o‘chirildi.");
+    return;
+  }
+
+  const tokens = args.split(/[\s,]+/).filter(Boolean);
+  const references = tokens.map((token) => parseTelegramPostLink(token));
+  if (tokens.length === 0 || !references.every((reference) => reference !== null)) {
+    const current = getPublicContentsPostReferences();
+    await sendText(
+      chatId,
+      [
+        "Format: /setpubcontents LINK1 LINK2 ... (o‘chirish: /setpubcontents off)",
+        "Joriy ochiq kanal postlari:",
+        "Har kanal uchun postlarni sahifa tartibida yozing (masalan: A1 A2 A3 B1 B2 B3).",
+        ...(current.length > 0
+          ? current.map((r, i) => `${i + 1}. ${formatTelegramPostLink(r)}`)
+          : ["yo‘q"]),
+        "",
+        "Masalan: /setpubcontents https://t.me/kanal_nomi/5 https://t.me/kanal_nomi/6",
+        "Bot ochiq kanalda admin bo‘lib, postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const list = references as TelegramPostReference[];
+  setSetting("public_contents_posts", JSON.stringify(list));
+  contentsCache.clear();
+  const updated = await refreshContentsPost();
+  await sendText(
+    chatId,
+    updated
+      ? `Ochiq kanal mundarijasi sozlandi (${list.length} ta post) va yangilandi.`
+      : "Manzillar saqlandi, lekin ba‘zi postlarni tahrirlab bo‘lmadi. Bot ochiq kanalda admin ekanini tekshiring.",
+  );
 }
 
 export async function handleSetcontentsCommand(ctx: CommandContext): Promise<void> {

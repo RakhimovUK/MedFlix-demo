@@ -45,6 +45,7 @@ export async function configureBotCommands(): Promise<void> {
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
     { command: "setcontents", description: "Mundarija postini sozlash" },
+    { command: "setpubcontents", description: "Ochiq kanal mundarijasi" },
     { command: "delete", description: "Kino kodini o‘chirish" },
     { command: "deleteseries", description: "Serialni o‘chirish" },
     { command: "deletepart", description: "Serial qismini o‘chirish" },
