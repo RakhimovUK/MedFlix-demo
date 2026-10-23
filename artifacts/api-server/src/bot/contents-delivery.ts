@@ -35,3 +35,25 @@ export async function copyContentsPosts(opts: {
 
   return { sent, failed };
 }
+
+/** Saqlangan post ro'yxatini (JSON) o'qiydi. Sozlama yo'q/buzuq bo'lsa null; "[]" — ataylab o'chirilgan. */
+export function parseStoredPostRefs(raw: string | null): ContentsPostRef[] | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed.filter(
+      (item): item is ContentsPostRef =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as ContentsPostRef).chatId === "string" &&
+        Number.isInteger((item as ContentsPostRef).messageId),
+    );
+  } catch {
+    return null;
+  }
+}
