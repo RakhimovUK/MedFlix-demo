@@ -1,3 +1,4 @@
+import { protectFor } from "./restriction-runtime";
 import { isAdmin } from "./config";
 import { parsePostText } from "./post-parser";
 import { findMovie, findSeries, getSetting, setSetting, touchBotUser } from "./database";
@@ -63,6 +64,9 @@ import {
   handlePosterCommand,
   handleSetcontentsCommand,
   handleSetpubcontentsCommand,
+  handleRestrictCommand,
+  handleUnrestrictCommand,
+  handleRestrictedCommand,
   handleSetposterCommand,
   handleSetstartCommand,
   handleSetstructureCommand,
@@ -208,6 +212,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         try {
           await telegramApi("copyMessage", {
             chat_id: chatId,
+            ...protectFor(chatId),
             from_chat_id: startVideo.channelChatId,
             message_id: startVideo.channelMessageId,
           });
@@ -286,6 +291,9 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/setstructure" ||
         command === "/setcontents" ||
         command === "/setpubcontents" ||
+        command === "/restrict" ||
+        command === "/unrestrict" ||
+        command === "/restricted" ||
         command === "/delete" ||
         command === "/deleteseries" ||
         command === "/deletepart" ||
@@ -321,6 +329,21 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
     if (command === "/setpubcontents") {
       await handleSetpubcontentsCommand(ctx);
+      return;
+    }
+
+    if (command === "/restrict") {
+      await handleRestrictCommand(ctx);
+      return;
+    }
+
+    if (command === "/unrestrict") {
+      await handleUnrestrictCommand(ctx);
+      return;
+    }
+
+    if (command === "/restricted") {
+      await handleRestrictedCommand(ctx);
       return;
     }
 

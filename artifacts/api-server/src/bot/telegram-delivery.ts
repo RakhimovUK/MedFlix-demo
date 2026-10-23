@@ -1,3 +1,4 @@
+import { protectFor } from "./restriction-runtime";
 import {
   findMovie,
   findSeries,
@@ -129,6 +130,7 @@ export async function sendContents(chatId: number): Promise<void> {
     copy: async (ref) => {
       await telegramApi("copyMessage", {
         chat_id: chatId,
+        ...protectFor(chatId),
         from_chat_id: ref.chatId,
         message_id: ref.messageId,
       });
@@ -345,6 +347,7 @@ export async function deliverChannelPost(
     ];
     const result = await telegramApi<{ message_id: number }>("copyMessage", {
       chat_id: chatId,
+      ...protectFor(chatId),
       from_chat_id: reference.channelChatId,
       message_id: reference.channelMessageId,
       ...(keyboardRows.length > 0

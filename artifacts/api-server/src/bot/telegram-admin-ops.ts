@@ -1,3 +1,4 @@
+import { protectFor } from "./restriction-runtime";
 import { logger } from "../lib/logger";
 import {
   createDatabaseBackup,
@@ -159,6 +160,7 @@ export async function runBroadcastJob(
       send: async (recipientId) => {
         await telegramApi("copyMessage", {
           chat_id: recipientId,
+          ...protectFor(recipientId),
           from_chat_id: pending.sourceChatId,
           message_id: pending.sourceMessageId,
         });

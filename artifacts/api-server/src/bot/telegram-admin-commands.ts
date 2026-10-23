@@ -1,3 +1,5 @@
+import { restrictionStore } from "./restriction-runtime";
+import { parseRestrictArgs } from "./restrictions";
 import {
   clearSeriesPoster,
   deleteMovie,
@@ -156,6 +158,44 @@ export async function handleSetpubcontentsCommand(ctx: CommandContext): Promise<
     updated
       ? `Ochiq kanal mundarijasi sozlandi (${list.length} ta post) va yangilandi.`
       : "Manzillar saqlandi, lekin ba‘zi postlarni tahrirlab bo‘lmadi. Bot ochiq kanalda admin ekanini tekshiring.",
+  );
+}
+
+export async function handleRestrictCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, args } = ctx;
+  const parsed = parseRestrictArgs(args);
+  if (!parsed) {
+    await sendText(chatId, "Format: /restrict USER_ID [izoh]\nMasalan: /restrict 123456789 raqobatchi");
+    return;
+  }
+  restrictionStore.restrict(parsed.userId, parsed.note);
+  await sendText(
+    chatId,
+    `🔒 ${parsed.userId} cheklandi: kinolarni ko‘radi, lekin forward, nusxa olish va saqlash mumkin emas.\nCheklov faqat bundan keyin yuboriladigan kontentga ta’sir qiladi.`,
+  );
+}
+
+export async function handleUnrestrictCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, args } = ctx;
+  const parsed = parseRestrictArgs(args);
+  if (!parsed) {
+    await sendText(chatId, "Format: /unrestrict USER_ID");
+    return;
+  }
+  const removed = restrictionStore.unrestrict(parsed.userId);
+  await sendText(
+    chatId,
+    removed ? `🔓 ${parsed.userId} uchun cheklov olib tashlandi.` : `${parsed.userId} cheklanmagan.`,
+  );
+}
+
+export async function handleRestrictedCommand(ctx: CommandContext): Promise<void> {
+  const rows = restrictionStore.list();
+  await sendText(
+    ctx.chatId,
+    rows.length === 0
+      ? "Cheklangan foydalanuvchilar yo‘q."
+      : ["Cheklanganlar:", ...rows.map((row) => `• ${row.user_id} — ${row.note || "izohsiz"} (${row.created_at})`)].join("\n"),
   );
 }
 
