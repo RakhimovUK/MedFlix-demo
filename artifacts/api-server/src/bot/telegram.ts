@@ -72,7 +72,7 @@ import {
   handleSetstructureCommand,
 } from "./telegram-admin-commands";
 import { handleCallbackQuery } from "./telegram-callbacks";
-import { configureBotCommands } from "./telegram-menu";
+import { configureBotCommands, configureBotProfile } from "./telegram-menu";
 import { refreshStructurePost } from "./telegram-structure";
 
 async function handleMessage(message: TelegramMessage): Promise<void> {
@@ -526,6 +526,7 @@ export async function startTelegramBot(): Promise<void> {
   const bot = await telegramApi<{ username?: string }>("getMe", {});
   botInfo.username = bot.username ?? "";
   await configureBotCommands();
+  await configureBotProfile();
   await refreshStructurePost();
   logger.info({ username: bot.username }, "Telegram bot connected");
   startAutoBackup();

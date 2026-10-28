@@ -1,6 +1,7 @@
 import { getAdminIds } from "./config";
 import { logger } from "../lib/logger";
 import { telegramApi } from "./telegram-state";
+import { PROFILE_BY_LANG, type ProfileLang } from "./telegram-profile";
 
 export async function configureBotCommands(): Promise<void> {
   await telegramApi("setMyCommands", {
@@ -69,6 +70,21 @@ export async function configureBotCommands(): Promise<void> {
       });
     } catch (err: unknown) {
       logger.error({ err, adminId }, "Failed to configure admin commands");
+    }
+  }
+}
+
+/** Har bir til uchun profil tavsifi, qisqa tavsif va buyruqlar. Xato bo'lsa start to'xtamaydi. */
+export async function configureBotProfile(): Promise<void> {
+  for (const lang of Object.keys(PROFILE_BY_LANG) as ProfileLang[]) {
+    const profile = PROFILE_BY_LANG[lang];
+    const scope = lang === "default" ? {} : { language_code: lang };
+    try {
+      await telegramApi("setMyDescription", { description: profile.description, ...scope });
+      await telegramApi("setMyShortDescription", { short_description: profile.shortDescription, ...scope });
+      await telegramApi("setMyCommands", { commands: profile.commands, ...scope });
+    } catch (err: unknown) {
+      logger.error({ err, lang }, "Failed to configure bot profile");
     }
   }
 }
