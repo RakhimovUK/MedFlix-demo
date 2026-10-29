@@ -1,10 +1,12 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { MovieLang } from "./post-language";
 
 export type Movie = {
   id: number;
   code: string;
+  lang: MovieLang;
   title: string;
   channelChatId: string;
   channelMessageId: number;
@@ -176,11 +178,16 @@ function mapMovie(row: Record<string, unknown>): Movie {
   return {
     id: Number(row.id),
     code: String(row.code),
+    lang: normalizeStoredLang(row.lang),
     title: String(row.title),
     channelChatId: String(row.channel_chat_id),
     channelMessageId: Number(row.channel_message_id),
     createdAt: String(row.created_at),
   };
+}
+
+function normalizeStoredLang(value: unknown): MovieLang {
+  return value === "ru" || value === "en" ? value : "uz";
 }
 
 function mapSeries(row: Record<string, unknown>): Series {
@@ -212,6 +219,47 @@ if (!movieColumns.some((column) => column.name === "poster_file_id")) {
 }
 if (!movieColumns.some((column) => column.name === "poster_caption")) {
   database.exec("ALTER TABLE movies ADD COLUMN poster_caption TEXT");
+}
+
+// Kino tili: (lang, code) juftligi noyob. Mavjud barcha kinolar "uz" bo'ladi.
+if (!movieColumns.some((column) => column.name === "lang")) {
+  const existing = database.prepare("SELECT COUNT(*) AS n FROM movies").get() as
+    | Record<string, unknown>
+    | undefined;
+  if (Number(existing?.n ?? 0) > 0) {
+    // Xavfsizlik: jadvalni o'zgartirishdan oldin zaxira nusxa.
+    try {
+      database.prepare("VACUUM INTO ?").run(`${databasePath}.before-lang.bak`);
+    } catch {
+      // zaxira allaqachon bor bo'lsa, davom etamiz
+    }
+  }
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN IMMEDIATE;
+    CREATE TABLE movies_migrated (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      lang TEXT NOT NULL DEFAULT 'uz',
+      title TEXT NOT NULL,
+      channel_chat_id TEXT NOT NULL,
+      channel_message_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      poster_file_id TEXT,
+      poster_caption TEXT,
+      UNIQUE (lang, code)
+    );
+    INSERT INTO movies_migrated
+      (id, code, lang, title, channel_chat_id, channel_message_id,
+       created_at, poster_file_id, poster_caption)
+    SELECT id, code, 'uz', title, channel_chat_id, channel_message_id,
+           created_at, poster_file_id, poster_caption
+    FROM movies;
+    DROP TABLE movies;
+    ALTER TABLE movies_migrated RENAME TO movies;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
 }
 
 database.exec(`
@@ -282,29 +330,30 @@ function mapMoviePost(row: Record<string, unknown>): MoviePost {
   };
 }
 
-export function findMovie(code: string): Movie | null {
+export function findMovie(code: string, lang: MovieLang = "uz"): Movie | null {
   const row = database
     .prepare(
-      `SELECT id, code, title, channel_chat_id, channel_message_id, created_at
-       FROM movies WHERE code = ?`,
+      `SELECT id, code, lang, title, channel_chat_id, channel_message_id, created_at
+       FROM movies WHERE code = ? AND lang = ?`,
     )
-    .get(code) as Record<string, unknown> | undefined;
+    .get(code, lang) as Record<string, unknown> | undefined;
 
   return row ? mapMovie(row) : null;
 }
 
-export function listMovies(): Movie[] {
+/** lang berilmasa — barcha tillar; berilsa faqat shu til. */
+export function listMovies(lang?: MovieLang): Movie[] {
   const rows = database
     .prepare(
-      `SELECT id, code, title, channel_chat_id, channel_message_id, created_at
-       FROM movies ORDER BY id DESC`,
+      `SELECT id, code, lang, title, channel_chat_id, channel_message_id, created_at
+       FROM movies WHERE (? IS NULL OR lang = ?) ORDER BY id DESC`,
     )
-    .all() as Record<string, unknown>[];
+    .all(lang ?? null, lang ?? null) as Record<string, unknown>[];
 
   return rows.map(mapMovie);
 }
 
-export function searchMovies(query: string): Movie[] {
+export function searchMovies(query: string, lang?: MovieLang): Movie[] {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) {
     return [];
@@ -313,18 +362,18 @@ export function searchMovies(query: string): Movie[] {
   const pattern = `%${normalizedQuery}%`;
   const rows = database
     .prepare(
-      `SELECT id, code, title, channel_chat_id, channel_message_id, created_at
+      `SELECT id, code, lang, title, channel_chat_id, channel_message_id, created_at
        FROM movies
-       WHERE code LIKE ? OR title LIKE ?
+       WHERE (code LIKE ? OR title LIKE ?) AND (? IS NULL OR lang = ?)
        ORDER BY CASE WHEN code = ? THEN 0 ELSE 1 END, title COLLATE NOCASE
        LIMIT 25`,
     )
-    .all(pattern, pattern, normalizedQuery) as Record<string, unknown>[];
+    .all(pattern, pattern, lang ?? null, lang ?? null, normalizedQuery) as Record<string, unknown>[];
 
   return rows.map(mapMovie);
 }
 
-export function listMoviePosts(movieCode: string): MoviePost[] {
+export function listMoviePosts(movieCode: string, lang: MovieLang = "uz"): MoviePost[] {
   const rows = database
     .prepare(
       `SELECT movie_posts.id, movie_posts.movie_id, movie_posts.post_number,
@@ -332,10 +381,10 @@ export function listMoviePosts(movieCode: string): MoviePost[] {
               movie_posts.channel_message_id, movie_posts.created_at
        FROM movie_posts
        INNER JOIN movies ON movies.id = movie_posts.movie_id
-       WHERE movies.code = ?
+       WHERE movies.code = ? AND movies.lang = ?
        ORDER BY movie_posts.post_number`,
     )
-    .all(movieCode) as Record<string, unknown>[];
+    .all(movieCode, lang) as Record<string, unknown>[];
 
   return rows.map(mapMoviePost);
 }
@@ -697,12 +746,12 @@ export function getSeriesPosterCaption(seriesCode: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-export function clearMoviePoster(movieCode: string): boolean {
+export function clearMoviePoster(movieCode: string, lang: MovieLang = "uz"): boolean {
   const result = database
     .prepare(
-      "UPDATE movies SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
+      "UPDATE movies SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND lang = ? AND poster_file_id IS NOT NULL",
     )
-    .run(movieCode);
+    .run(movieCode, lang);
   return Number(result.changes) > 0;
 }
 
@@ -710,27 +759,28 @@ export function setMoviePoster(
   movieCode: string,
   fileId: string,
   caption: string | null = null,
+  lang: MovieLang = "uz",
 ): boolean {
   const result = database
     .prepare(
-      "UPDATE movies SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ?",
+      "UPDATE movies SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ? AND lang = ?",
     )
-    .run(fileId, caption, movieCode);
+    .run(fileId, caption, movieCode, lang);
   return Number(result.changes) > 0;
 }
 
-export function getMoviePoster(movieCode: string): string | null {
+export function getMoviePoster(movieCode: string, lang: MovieLang = "uz"): string | null {
   const row = database
-    .prepare("SELECT poster_file_id FROM movies WHERE code = ?")
-    .get(movieCode) as Record<string, unknown> | undefined;
+    .prepare("SELECT poster_file_id FROM movies WHERE code = ? AND lang = ?")
+    .get(movieCode, lang) as Record<string, unknown> | undefined;
   const value = row?.poster_file_id;
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function getMoviePosterCaption(movieCode: string): string | null {
+export function getMoviePosterCaption(movieCode: string, lang: MovieLang = "uz"): string | null {
   const row = database
-    .prepare("SELECT poster_caption FROM movies WHERE code = ?")
-    .get(movieCode) as Record<string, unknown> | undefined;
+    .prepare("SELECT poster_caption FROM movies WHERE code = ? AND lang = ?")
+    .get(movieCode, lang) as Record<string, unknown> | undefined;
   const value = row?.poster_caption;
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -1082,25 +1132,29 @@ export function listGenres(): Array<{ name: string; movieCount: number }> {
   }));
 }
 
-export function listMoviesByGenre(genreName: string): Movie[] {
+export function listMoviesByGenre(genreName: string, lang?: MovieLang): Movie[] {
   const rows = database
     .prepare(
-      `SELECT movies.id, movies.code, movies.title,
+      `SELECT movies.id, movies.code, movies.lang, movies.title,
               movies.channel_chat_id, movies.channel_message_id, movies.created_at
        FROM movies
        INNER JOIN movie_genres ON movie_genres.movie_id = movies.id
        INNER JOIN genres ON genres.id = movie_genres.genre_id
-       WHERE genres.name = ?
+       WHERE genres.name = ? AND (? IS NULL OR movies.lang = ?)
        ORDER BY movies.title COLLATE NOCASE
        LIMIT 50`,
     )
-    .all(genreName) as Record<string, unknown>[];
+    .all(genreName, lang ?? null, lang ?? null) as Record<string, unknown>[];
 
   return rows.map(mapMovie);
 }
 
-export function setMovieGenres(code: string, genreNames: string[]): boolean {
-  const movie = findMovie(code);
+export function setMovieGenres(
+  code: string,
+  genreNames: string[],
+  lang: MovieLang = "uz",
+): boolean {
+  const movie = findMovie(code, lang);
   if (!movie) {
     return false;
   }
@@ -1146,27 +1200,30 @@ export function setMovieGenres(code: string, genreNames: string[]): boolean {
 
 export function upsertMovie(input: {
   code: string;
+  lang?: MovieLang;
   title: string;
   channelChatId: string;
   channelMessageId: number;
 }): Movie {
+  const lang = input.lang ?? "uz";
   database
     .prepare(
-      `INSERT INTO movies (code, title, channel_chat_id, channel_message_id)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(code) DO UPDATE SET
+      `INSERT INTO movies (code, lang, title, channel_chat_id, channel_message_id)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(lang, code) DO UPDATE SET
          title = excluded.title,
          channel_chat_id = excluded.channel_chat_id,
          channel_message_id = excluded.channel_message_id`,
     )
     .run(
       input.code,
+      lang,
       input.title,
       input.channelChatId,
       input.channelMessageId,
     );
 
-  const movie = findMovie(input.code) as Movie;
+  const movie = findMovie(input.code, lang) as Movie;
   database
     .prepare(
       `INSERT INTO movie_posts
@@ -1189,12 +1246,14 @@ export function upsertMovie(input: {
 
 export function upsertMoviePost(input: {
   movieCode: string;
+  lang?: MovieLang;
   postNumber: number;
   title: string;
   channelChatId: string;
   channelMessageId: number;
 }): MoviePost | null {
-  const movie = findMovie(input.movieCode);
+  const lang = input.lang ?? "uz";
+  const movie = findMovie(input.movieCode, lang);
   if (!movie) {
     return null;
   }
@@ -1218,14 +1277,16 @@ export function upsertMoviePost(input: {
     );
 
   return (
-    listMoviePosts(input.movieCode).find(
+    listMoviePosts(input.movieCode, lang).find(
       (post) => post.postNumber === input.postNumber,
     ) ?? null
   );
 }
 
-export function deleteMovie(code: string): boolean {
-  const result = database.prepare("DELETE FROM movies WHERE code = ?").run(code);
+export function deleteMovie(code: string, lang: MovieLang = "uz"): boolean {
+  const result = database
+    .prepare("DELETE FROM movies WHERE code = ? AND lang = ?")
+    .run(code, lang);
   return result.changes > 0;
 }
 

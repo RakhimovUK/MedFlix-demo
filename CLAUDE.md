@@ -10,7 +10,7 @@ repoda qiladi (1 oy sinov muddati). Replit faqat botni ishga tushirish uchun qol
 - "Push qilinganmi?" deb so'rama. Muammo aytilmasa push qilingan deb hisobla. Push'ni o'zing bajar.
 - Har o'zgarishdan oldin shuni tekshir: `pnpm --filter @workspace/api-server test` va
   `pnpm run typecheck` o'tishi shart. Yiqilsa commit qilma.
-- Faqat Telegram `main` shoxiga kichik, tushunarli commitlar (o'zbekcha xabar).
+- Faqat `main` shoxiga kichik, tushunarli commitlar (o'zbekcha xabar).
 - Token va sirlarni fayllarga yozma (`TELEGRAM_BOT_TOKEN` faqat Replit Secrets'da). Repo ochiq.
 - Mavjud ma'lumotlarni buzadigan o'zgarishdan oldin zaxira (`/backup`) va migratsiya testi bo'lsin.
 - Telefon orqali ishlaydi: qo'lda nusxalanadigan buyruq berish kerak bo'lsa, bloklar ≤120 qator.
@@ -36,7 +36,8 @@ repoda qiladi (1 oy sinov muddati). Replit faqat botni ishga tushirish uchun qol
 Kod tartibi va sub-kodlar (1.A), qism navigatsiyasi, mundarija (5 post + ochiq kanallar `/setpubcontents`),
 `/deletepart`, serial auto-delete, poster (`/setposter`...), so'rovlar topic (✅/❌/💬), post parser,
 aqlli qidiruv, `/alias`, avtomatik so'rov, telegram.ts bo'linishi, `/restrict`,
-til 1-vazifa (bot profili uz/ru/en), til 2-vazifa (`post-language.ts`).
+til 1-vazifa (bot profili uz/ru/en), til 2-vazifa (`post-language.ts`), til 4-vazifa (`movies.lang`, UNIQUE(lang, code); eski kinolar `uz`;
+migratsiyadan oldin `<baza>.before-lang.bak` zaxira; database.ts funksiyalarida `lang` parametri, default `uz`).
 
 ## Asosiy maqsad: bitta botda 3 til (uz / ru / en)
 Foydalanuvchi tilni tanlaydi; bot faqat shu tildagi kontentni beradi. Bir xil kod (masalan `1`)
@@ -51,8 +52,8 @@ Qarorlar (o'zgartirma):
 - Poster va caption Gemini orqali tayyorlanadi; mini post (synopsis) admin tasdig'idan keyin ko'rinadi.
 
 ## Navbat (tartib bilan, har biri alohida kichik commit)
+(4-vazifa bajarildi, 3-dan oldin qilindi: tanlangan tilni saqlash uchun baza kerak edi.)
 3. Ko'p tilli/belgisiz post uchun admin tanlovi (`decidePostLanguage` ni `telegram.ts` post oqimiga ulash; kutilayotgan post mexanizmi).
-4. `/backup`, so'ng `movies.lang` (default `uz`). Eng xavfli qism: migratsiya testi shart.
 5. `series`, `series_episodes`, `genres`, `movie_posts` ga `lang`.
 6. `bot_users.lang`, `getUserLang/setUserLang`.
 7. Qidiruv foydalanuvchi tilida. 8. Yetkazish, tugmalar, sevimlilar, progress tilga bog'liq.
