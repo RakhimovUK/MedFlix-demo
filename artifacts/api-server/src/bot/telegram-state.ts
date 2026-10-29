@@ -1,3 +1,4 @@
+import { createSynopsisStore } from "./synopsis";
 import { createNavCleanup } from "./nav-cleanup";
 import { createTelegramApi } from "./telegram-api";
 import { createSearchStore } from "./search-store";
@@ -38,6 +39,8 @@ export const { apiUrl, telegramApi, sendText, answerCallbackQuery } = createTele
 });
 
 export const searchStore = createSearchStore(getDatabase());
+
+export const synopsisStore = createSynopsisStore(getDatabase());
 
 export const aliasLearner = createAliasLearner({
   bump: (aliasNorm, kind, code) => searchStore.bumpAlias(aliasNorm, kind, code),

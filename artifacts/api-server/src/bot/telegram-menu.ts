@@ -50,6 +50,8 @@ export async function configureBotCommands(): Promise<void> {
     { command: "setcontents", description: "Mundarija postini sozlash" },
     { command: "setpubcontents", description: "Ochiq kanal mundarijasi" },
     { command: "lang", description: "Admin ish tili (uz/ru/en)" },
+    { command: "synopsis", description: "Mini post (Haqida) qo‘shish/ko‘rish" },
+    { command: "delsynopsis", description: "Mini postni o‘chirish" },
     { command: "restrict", description: "Foydalanuvchini cheklash (forward/saqlash yo‘q)" },
     { command: "unrestrict", description: "Cheklovni olib tashlash" },
     { command: "restricted", description: "Cheklanganlar ro‘yxati" },

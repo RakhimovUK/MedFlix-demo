@@ -1,3 +1,4 @@
+import { aboutCallback, type SynopsisKind } from "./synopsis";
 import { protectFor } from "./restriction-runtime";
 import {
   findMovie,
@@ -64,7 +65,7 @@ import {
 import { getDiscussionUrl, isAdmin } from "./config";
 import { buildNewKeyboard, buildTopKeyboard, newHeader, topHeader } from "./discover";
 import { t } from "./i18n";
-import { botInfo, navCleanup, sendText, telegramApi } from "./telegram-state";
+import { botInfo, navCleanup, sendText, synopsisStore, telegramApi } from "./telegram-state";
 import {
   getContentsPostReferences,
   getStructurePostReference,
@@ -250,6 +251,7 @@ export async function sendSeriesEpisodes(
       isSeriesSubscribed(chatId, series.code),
     ),
   );
+  rows.push(...aboutRows("series", series.id));
   rows.push(
     buildFavoriteRow(
       "series",
@@ -438,6 +440,7 @@ export async function deliverMovie(
         ];
 
   const favoriteRows = [
+    ...aboutRows("movie", movie.id),
     buildFavoriteRow(
       "movie",
       encodeCallbackValue(movie.code),
@@ -687,4 +690,11 @@ export async function notifyNewEpisode(
       .filter(Boolean)
       .join("\n"),
   );
+}
+
+/** Tasdiqlangan mini post bo'lsa "ℹ️ Haqida" tugmasi. */
+export function aboutRows(kind: SynopsisKind, contentId: number): InlineKeyboardButton[][] {
+  return synopsisStore.getApproved(kind, contentId)
+    ? [[{ text: t("about.button"), callback_data: aboutCallback(kind, contentId) }]]
+    : [];
 }

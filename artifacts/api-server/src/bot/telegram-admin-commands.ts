@@ -1,3 +1,10 @@
+import {
+  SYNOPSIS_MAX,
+  buildAboutText,
+  parseReviewData,
+  reviewCallback,
+  type SynopsisKind,
+} from "./synopsis";
 import { restrictionStore } from "./restriction-runtime";
 import { parseRestrictArgs } from "./restrictions";
 import {
@@ -56,6 +63,7 @@ import { isAdmin } from "./config";
 import {
   answerCallbackQuery,
   pendingForwardedPosts,
+  synopsisStore,
   pendingPosterRequests,
   searchStore,
   sendText,
@@ -693,8 +701,10 @@ export async function handleDeleteCommand(ctx: CommandContext): Promise<void> {
     return;
   }
 
+  const movieToDelete = findMovie(code);
   const deleted = deleteMovie(code);
   if (deleted) {
+    if (movieToDelete) synopsisStore.remove("movie", movieToDelete.id);
     await refreshStructurePost();
   }
   await sendText(
@@ -753,8 +763,10 @@ export async function handleDeleteseriesCommand(ctx: CommandContext): Promise<vo
     return;
   }
 
+  const seriesToDelete = findSeries(code);
   const deleted = deleteSeries(code);
   if (deleted) {
+    if (seriesToDelete) synopsisStore.remove("series", seriesToDelete.id);
     await refreshStructurePost();
   }
   await sendText(
@@ -1027,4 +1039,133 @@ export async function handleLangCommand(ctx: CommandContext): Promise<void> {
     chatId,
     `✅ Ish tili: ${LANG_LABELS[lang]}\nEndi admin buyruqlari, qidiruv va katalog shu til bazasida ishlaydi.`,
   );
+}
+
+/** Kod joriy ish tilida kino yoki serialmi (serial ustun). */
+function resolveSynopsisTarget(
+  code: string,
+): { kind: SynopsisKind; id: number; title: string } | null {
+  const series = findSeries(code);
+  if (series) return { kind: "series", id: series.id, title: `📺 ${series.title}` };
+  const movie = findMovie(code);
+  if (movie) return { kind: "movie", id: movie.id, title: `🎬 ${movie.title}` };
+  return null;
+}
+
+function synopsisReviewKeyboard(kind: SynopsisKind, id: number) {
+  return {
+    inline_keyboard: [
+      [
+        { text: "✅ Tasdiqlash", callback_data: reviewCallback("ok", kind, id) },
+        { text: "❌ Bekor qilish", callback_data: reviewCallback("no", kind, id) },
+      ],
+    ],
+  };
+}
+
+/**
+ * /synopsis KOD | matn — mini post (qoralama, tasdiqdan keyin ko'rinadi).
+ * /synopsis KOD — joriy holat. Matnni xabarga reply qilib ham berish mumkin.
+ */
+export async function handleSynopsisCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, message, args } = ctx;
+  const separator = args.indexOf("|");
+  const rawCode = separator >= 0 ? args.slice(0, separator) : args;
+  const code = normalizeCode(rawCode.trim());
+  const inlineText = separator >= 0 ? args.slice(separator + 1).trim() : "";
+  const text = inlineText || message.reply_to_message?.text || message.reply_to_message?.caption || "";
+
+  if (!code) {
+    await sendText(
+      chatId,
+      [
+        "Format: /synopsis KOD | Qisqa mazmun",
+        "yoki matnli xabarga reply qilib: /synopsis KOD",
+        "Ko‘rish: /synopsis KOD   O‘chirish: /delsynopsis KOD",
+        "Matn joriy ish tilidagi (/lang) kino yoki serialga yoziladi va ✅ tasdiqlangandan keyin ko‘rinadi.",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const target = resolveSynopsisTarget(code);
+  if (!target) {
+    await sendText(chatId, `${code} kodi joriy ish tilida topilmadi. Tilni tekshiring: /lang`);
+    return;
+  }
+
+  if (!text.trim()) {
+    const current = synopsisStore.get(target.kind, target.id);
+    await sendText(
+      chatId,
+      current
+        ? `${current.status === "approved" ? "✅ Tasdiqlangan" : "📝 Qoralama"}\n\n${buildAboutText(target.title, current.text)}`
+        : `${code} uchun mini post yo‘q. Qo‘shish: /synopsis ${code} | matn`,
+      current && current.status === "draft" ? synopsisReviewKeyboard(target.kind, target.id) : undefined,
+    );
+    return;
+  }
+
+  synopsisStore.saveDraft(target.kind, target.id, text);
+  const saved = synopsisStore.get(target.kind, target.id)!;
+  await sendText(
+    chatId,
+    [
+      "📝 Mini post qoralamasi (foydalanuvchilarga hali ko‘rinmaydi):",
+      text.trim().length > SYNOPSIS_MAX ? `(matn ${SYNOPSIS_MAX} belgigacha qisqartirildi)` : "",
+      "",
+      buildAboutText(target.title, saved.text),
+    ]
+      .filter((line, index) => index !== 1 || line)
+      .join("\n"),
+    synopsisReviewKeyboard(target.kind, target.id),
+  );
+}
+
+export async function handleDelsynopsisCommand(ctx: CommandContext): Promise<void> {
+  const code = normalizeCode(ctx.args.trim());
+  const target = code ? resolveSynopsisTarget(code) : null;
+  if (!target) {
+    await sendText(ctx.chatId, "Format: /delsynopsis KOD (joriy ish tilida)");
+    return;
+  }
+  const removed = synopsisStore.remove(target.kind, target.id);
+  await sendText(ctx.chatId, removed ? `${code} mini posti o‘chirildi.` : `${code} uchun mini post yo‘q edi.`);
+}
+
+/** "syn:ok|no:..." — admin mini postni tasdiqlaydi yoki bekor qiladi. */
+export async function handleSynopsisReviewCallback(
+  callbackQuery: TelegramCallbackQuery,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  const parsed = parseReviewData(callbackQuery.data ?? "");
+  if (!isAdmin(callbackQuery.from.id) || !parsed) {
+    await answerCallbackQuery(callbackQuery.id, "Bu tugma faqat admin uchun.");
+    return;
+  }
+
+  const current = synopsisStore.get(parsed.kind, parsed.contentId);
+  let result: string;
+  if (!current) {
+    result = "Mini post topilmadi (o‘chirilgan bo‘lishi mumkin).";
+  } else if (parsed.action === "ok") {
+    synopsisStore.approve(parsed.kind, parsed.contentId);
+    result = "✅ Mini post tasdiqlandi — foydalanuvchilarda «ℹ️ Haqida» tugmasi chiqadi.";
+  } else {
+    synopsisStore.remove(parsed.kind, parsed.contentId);
+    result = "❌ Mini post bekor qilindi.";
+  }
+
+  await answerCallbackQuery(callbackQuery.id, result.slice(0, 190));
+  try {
+    await telegramApi("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    });
+  } catch (err: unknown) {
+    logger.warn({ err, chatId }, "Failed to clear synopsis review buttons");
+  }
+  await sendText(chatId, result);
 }

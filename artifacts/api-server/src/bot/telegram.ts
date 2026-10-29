@@ -83,7 +83,9 @@ import {
   handleSetposterCommand,
   handleSetstartCommand,
   handleSetstructureCommand,
+  handleDelsynopsisCommand,
   handleLangCommand,
+  handleSynopsisCommand,
 } from "./telegram-admin-commands";
 import { handleCallbackQuery } from "./telegram-callbacks";
 import { configureBotCommands, configureBotProfile } from "./telegram-menu";
@@ -262,6 +264,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/broadcast" ||
         command === "/backup" ||
         command === "/lang" ||
+        command === "/synopsis" ||
+        command === "/delsynopsis" ||
         command === "/version" ||
         command === "/admin" ||
         command === "/setposter" ||
@@ -362,6 +366,16 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
     if (command === "/lang") {
       await handleLangCommand(ctx);
+      return;
+    }
+
+    if (command === "/synopsis") {
+      await handleSynopsisCommand(ctx);
+      return;
+    }
+
+    if (command === "/delsynopsis") {
+      await handleDelsynopsisCommand(ctx);
       return;
     }
 

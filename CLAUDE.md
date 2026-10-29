@@ -75,8 +75,16 @@ Qarorlar (o'zgartirma):
 - `/catalog`: `uz` uchun kanal mundarija postlari, `ru/en` uchun inline katalog.
 - Testlar: `pnpm test` endi `tests/resolve-ts.mjs` orqali kengaytmasiz importlarni ham ochadi.
 
-## Navbat
-13. Mini post (synopsis) va "Haqida" tugmasi (Gemini matni, admin tasdig'idan keyin).
+## Mini post (13-vazifa, bajarildi)
+- `/synopsis KOD | matn` (yoki matnga reply: `/synopsis KOD`) — joriy ish tilidagi kino/serialga qoralama;
+  admin ✅ bosgach foydalanuvchilarda "ℹ️ Haqida" tugmasi (`about:m|s:<id>`). Yangi matn yana qoralama bo'ladi.
+  `/synopsis KOD` — holat, `/delsynopsis KOD` — o'chirish. Saqlash: `synopsis.ts` (`synopses` jadvali, id bo'yicha).
+
+## Navbat (ko'p tilli bot tugadi)
+- Haqiqiy botda sinov: ru/en kino qo'shish, til tanlash, so'rovlar. Topilgan xatolarni tuzatish.
+- Rus/ingliz kanal mundarijasi (hozir kanal postlari faqat `uz`; ru/en foydalanuvchilarga inline katalog).
+- Monitoring va zaxira tekshiruvi, eski kinolar migratsiyasi.
+- xFilms klon boti (shu kod asosida).
 
 ## 1 oylik reja
 - 1-hafta: 3–6-vazifalar (til asosi, baza migratsiyasi). Har migratsiyadan oldin zaxira.

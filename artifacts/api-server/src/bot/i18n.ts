@@ -273,6 +273,9 @@ export const MESSAGES = {
   "card.episodes": { uz: "🎬 {n} ta qism", ru: "🎬 Серий: {n}", en: "🎬 {n} episodes" },
   "discuss.button": { uz: "💬 Muhokama qilish", ru: "💬 Обсудить", en: "💬 Discuss" },
 
+  "about.button": { uz: "ℹ️ Haqida", ru: "ℹ️ О фильме", en: "ℹ️ About" },
+  "about.none": { uz: "Bu kino haqida ma’lumot hali yo‘q.", ru: "Описание пока недоступно.", en: "No description yet." },
+
   // Sevimlilar
   "fav.header": { uz: "⭐ Sevimlilaringiz", ru: "⭐ Ваше избранное", en: "⭐ Your favorites" },
   "fav.empty": {

@@ -1,6 +1,8 @@
 import { parseEpisodeId } from "./series-navigation";
 import {
   findMovie,
+  findMovieById,
+  findSeriesById,
   findSeriesEpisodeById,
   listMoviesByGenre,
   toggleFavorite,
@@ -23,6 +25,7 @@ import {
   aliasLearner,
   answerCallbackQuery,
   navCleanup,
+  synopsisStore,
   requestFlow,
   sendText,
   telegramApi,
@@ -45,7 +48,12 @@ import {
   handleStatsCommand,
   handleVersionCommand,
 } from "./telegram-admin-ops";
-import { handleAddLanguageCallback, handleListCommand } from "./telegram-admin-commands";
+import {
+  handleAddLanguageCallback,
+  handleListCommand,
+  handleSynopsisReviewCallback,
+} from "./telegram-admin-commands";
+import { buildAboutText, parseAboutData } from "./synopsis";
 import {
   displayName,
   handleSetLanguageCallback,
@@ -245,6 +253,11 @@ export async function handleCallbackQueryInner(
     return;
   }
 
+  if (data.startsWith("syn:")) {
+    await handleSynopsisReviewCallback(callbackQuery, chatId, message.message_id);
+    return;
+  }
+
   if (data.startsWith("addlang:")) {
     await handleAddLanguageCallback(callbackQuery, chatId, message.message_id);
     return;
@@ -318,6 +331,19 @@ export async function handleCallbackQueryInner(
 
   if (data.startsWith("ntf:")) {
     await handleNotifyToggleCallback(callbackQuery, message, chatId);
+    return;
+  }
+
+  if (data.startsWith("about:")) {
+    const about = parseAboutData(data);
+    const text = about ? synopsisStore.getApproved(about.kind, about.contentId) : null;
+    await answerCallbackQuery(callbackQuery.id, text ? undefined : t("about.none"));
+    if (about && text) {
+      const title = about.kind === "series"
+        ? findSeriesById(about.contentId)?.title
+        : findMovieById(about.contentId)?.title;
+      await sendText(chatId, buildAboutText(`${about.kind === "series" ? "📺" : "🎬"} ${title ?? ""}`, text));
+    }
     return;
   }
 

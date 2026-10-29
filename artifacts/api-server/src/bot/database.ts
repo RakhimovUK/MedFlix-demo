@@ -1392,3 +1392,20 @@ export function findCodeLangs(code: string): MovieLang[] {
   const found = new Set(rows.map((row) => String(row.lang)));
   return (["uz", "ru", "en"] as MovieLang[]).filter((lang) => found.has(lang));
 }
+
+export function findMovieById(id: number): Movie | null {
+  const row = database
+    .prepare(
+      `SELECT id, code, lang, title, channel_chat_id, channel_message_id, created_at
+       FROM movies WHERE id = ?`,
+    )
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? mapMovie(row) : null;
+}
+
+export function findSeriesById(id: number): { id: number; code: string; title: string } | null {
+  const row = database
+    .prepare("SELECT id, code, title FROM series WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? { id: Number(row.id), code: String(row.code), title: String(row.title) } : null;
+}
