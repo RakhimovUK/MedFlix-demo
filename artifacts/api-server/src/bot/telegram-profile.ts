@@ -18,6 +18,7 @@ const UZ: BotProfile = {
     { command: "mysubs", description: "Yangi qism xabarlarim" },
     { command: "fav", description: "Sevimlilarim" },
     { command: "request", description: "Kino so‘rash (topilmagan kino)" },
+    { command: "language", description: "Tilni o‘zgartirish" },
   ],
 };
 
@@ -33,6 +34,7 @@ const RU: BotProfile = {
     { command: "mysubs", description: "Мои уведомления о новых сериях" },
     { command: "fav", description: "Мои избранные" },
     { command: "request", description: "Запросить фильм (если не найден)" },
+    { command: "language", description: "Сменить язык" },
   ],
 };
 
@@ -48,6 +50,7 @@ const EN: BotProfile = {
     { command: "mysubs", description: "My new-episode alerts" },
     { command: "fav", description: "My favorites" },
     { command: "request", description: "Request a movie (if not found)" },
+    { command: "language", description: "Change language" },
   ],
 };
 

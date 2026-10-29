@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { protectFor } from "./restriction-runtime";
 import { isAdmin } from "./config";
 import { parsePostText } from "./post-parser";
@@ -5,6 +6,7 @@ import {
   findMovie,
   findSeries,
   getSetting,
+  getStoredUserLang,
   getUserLang,
   runWithLang,
   setSetting,
@@ -47,6 +49,7 @@ import {
 } from "./telegram-admin-ops";
 import { getStartKeyboard, requireSubscription } from "./telegram-subscription";
 import {
+  deliverByCode,
   displayName,
   handleCatalogCommand,
   handleIdCommand,
@@ -54,6 +57,8 @@ import {
   handleRequestCommand,
   handleSearchCommand,
   runSmartSearch,
+  sendLanguagePicker,
+  sendWelcome,
 } from "./telegram-user-commands";
 import {
   handleAddCommand,
@@ -169,6 +174,18 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
+  // Til hali tanlanmagan bo'lsa, /start avval til tanlashni so'raydi (obunadan ham oldin,
+  // shunda obuna xabari ham tanlangan tilda chiqadi). Deep-link kodi tugmada saqlanadi.
+  if (chatId > 0 && /^\/start(?:@\w+)?(?:\s|$)/u.test(text) && !getStoredUserLang(userId)) {
+    const payload = commandParts(text).args;
+    await sendLanguagePicker(
+      chatId,
+      message.from?.language_code,
+      payload ? normalizeCode(payload) : undefined,
+    );
+    return;
+  }
+
   if (!isAdmin(userId) && !(await requireSubscription(chatId, userId))) {
     return;
   }
@@ -178,62 +195,18 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const ctx: CommandContext = { chatId, userId, message, text, command, args };
 
     if (command === "/start" && args) {
-      const payloadCode = normalizeCode(args);
-      const payloadSeries = findSeries(payloadCode);
-      if (payloadSeries) {
-        await sendSeriesEpisodes(chatId, payloadSeries.code);
-        return;
-      }
-      const payloadMovie = findMovie(payloadCode);
-      if (payloadMovie) {
-        await deliverMovie(chatId, payloadMovie);
+      if (await deliverByCode(chatId, normalizeCode(args))) {
         return;
       }
     }
 
     if (command === "/start" || command === "/help") {
-      const welcomeLines = [
-        "Kino botga xush kelibsiz.",
-        "",
-        "Kino ko‘rish uchun kino kodini yuboring.",
-        "Masalan: 101",
-      ];
+      await sendWelcome(chatId, userId);
+      return;
+    }
 
-      if (isAdmin(userId)) {
-        welcomeLines.push(
-          "",
-          "Admin bo‘limi:",
-          "1) Kanal postini botga forward qiling",
-          "2) /add KOD | Kino nomi — 1-post",
-          "3) /addpost KOD | 2 | Kino fayli — qo‘shimcha post",
-          "4) /addseries KOD | Serial nomi",
-          "5) Har bir serial posti uchun /addpart KOD | FASL | QISM | Nomi",
-          "6) /setstart — start videosini o‘rnatish",
-          "7) /setstructure POST_LINK — struktura postini sozlash",
-          "/delete KOD",
-          "/deleteseries KOD",
-          "/list",
-        );
-      }
-
-      const startVideo = getStartVideoReference();
-      if (startVideo) {
-        try {
-          await telegramApi("copyMessage", {
-            chat_id: chatId,
-            ...protectFor(chatId),
-            from_chat_id: startVideo.channelChatId,
-            message_id: startVideo.channelMessageId,
-          });
-        } catch (err: unknown) {
-          logger.error(
-            { err, chatId, ...startVideo },
-            "Failed to copy start video",
-          );
-        }
-      }
-
-      await sendText(chatId, welcomeLines.join("\n"), getStartKeyboard());
+    if (command === "/language") {
+      await sendLanguagePicker(chatId, message.from?.language_code);
       return;
     }
 
@@ -477,7 +450,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   await runSmartSearch(
     chatId,
     text,
-    "Bu kod yoki nom bo‘yicha kino topilmadi. Qayta tekshirib ko‘ring.",
+    t("notFound.text"),
     { id: userId, name: displayName(message.from) },
   );
 }

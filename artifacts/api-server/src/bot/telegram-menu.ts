@@ -14,6 +14,7 @@ export async function configureBotCommands(): Promise<void> {
       { command: "mysubs", description: "Yangi qism xabarlarim" },
       { command: "fav", description: "Sevimlilarim" },
       { command: "request", description: "Kino so‘rash (topilmagan kino)" },
+      { command: "language", description: "Tilni o‘zgartirish" },
     ],
   });
 
@@ -26,6 +27,7 @@ export async function configureBotCommands(): Promise<void> {
     { command: "mysubs", description: "Yangi qism xabarlarim" },
     { command: "fav", description: "Sevimlilarim" },
     { command: "request", description: "Kino so‘rash (topilmagan kino)" },
+    { command: "language", description: "Tilni o‘zgartirish" },
     { command: "add", description: "Kanal postidan kino qo‘shish" },
     { command: "addpost", description: "Kinoga qo‘shimcha post qo‘shish" },
     { command: "addseries", description: "Serial yoki ko‘p qismli kino yaratish" },

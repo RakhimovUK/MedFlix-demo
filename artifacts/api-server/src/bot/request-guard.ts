@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /**
  * Matn adminlarga "so'rov" bo'lib borishi mumkinmi? Spamdan himoya:
  * kod ko'rinishidagi matn, salomlashuv, havola va juda qisqa/uzun matn so'rovga aylanmaydi.
@@ -43,14 +44,14 @@ export function checkRequestText(raw: string): RequestGuardResult {
 export function describeGuardReason(reason: RequestGuardReason): string {
   switch (reason) {
     case "short":
-      return "So‘rov juda qisqa. Kino nomini to‘liqroq yozing.";
+      return t("guard.short");
     case "long":
-      return "So‘rov juda uzun. Faqat kino nomini yozing.";
+      return t("guard.long");
     case "code":
-      return "Bu kod bo‘yicha kino topilmadi. Kodni tekshirib qayta yuboring yoki 📚 Katalogdan tanlang.";
+      return t("guard.code");
     case "greeting":
-      return "Salom! Kino kodini yoki nomini yuboring, men topib beraman.";
+      return t("guard.greeting");
     case "link":
-      return "Havolalar so‘rov sifatida qabul qilinmaydi. Kino nomini yozing.";
+      return t("guard.link");
   }
 }

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { RequiredSubscription } from "./config";
 
 export type InlineKeyboardButton = {
@@ -39,24 +40,27 @@ export function buildSubscriptionKeyboard(
     ...(subscription.url ? { url: subscription.url } : {}),
   }));
 
-  buttons.push({ text: "✅ Tekshirish", callback_data: "subscription:check" });
+  buttons.push({ text: t("sub.check"), callback_data: "subscription:check" });
   return { inline_keyboard: buttons.map((button) => [button]) };
 }
 
 export function buildStartKeyboard(discussionUrl?: string): ReplyMarkup {
   const rows: InlineKeyboardButton[][] = [
     [
-      { text: "🎬 Katalog", callback_data: "catalog" },
-      { text: "🔍 Qidirish", callback_data: "search:help" },
+      { text: t("kb.catalog"), callback_data: "catalog" },
+      { text: t("kb.search"), callback_data: "search:help" },
     ],
     [
-      { text: "🆕 Yangilari", callback_data: "discover:new" },
-      { text: "🔥 Top", callback_data: "discover:top" },
+      { text: t("kb.new"), callback_data: "discover:new" },
+      { text: t("kb.top"), callback_data: "discover:top" },
     ],
-    [{ text: "⭐ Sevimlilar", callback_data: "fav:list" }],
+    [
+      { text: t("kb.favorites"), callback_data: "fav:list" },
+      { text: t("lang.button"), callback_data: "lang:menu" },
+    ],
   ];
   if (discussionUrl) {
-    rows.push([{ text: "💬 Muhokama chati", url: discussionUrl }]);
+    rows.push([{ text: t("kb.discussion"), url: discussionUrl }]);
   }
   return { inline_keyboard: rows };
 }
@@ -84,7 +88,7 @@ export function seriesKeyboard(series: SeriesLike[]): ReplyMarkup | undefined {
   return {
     inline_keyboard: series.slice(0, 25).map((item) => [
       {
-        text: `📺 ${item.code} — ${item.title} (${item.seasonCount} fasl, ${item.episodeCount} qism)`.slice(0, 64),
+        text: `📺 ${item.code} — ${item.title} (${t("series.short", { s: item.seasonCount, e: item.episodeCount })})`.slice(0, 64),
         callback_data: `series:${encodeCallbackValue(item.code)}`,
       },
     ]),

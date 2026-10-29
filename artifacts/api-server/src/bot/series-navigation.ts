@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export type NavEpisode = {
   id: number;
   seasonNumber: number;
@@ -69,13 +70,13 @@ export function buildEpisodeNavigationRows(
   const row: NavButton[] = [];
   if (neighbors.previous) {
     row.push({
-      text: "⬅️ Oldingi qism",
+      text: t("episode.prev"),
       callback_data: episodeCallback(neighbors.previous.id),
     });
   }
   if (neighbors.next) {
     row.push({
-      text: "Keyingi qism ➡️",
+      text: t("episode.next"),
       callback_data: episodeCallback(neighbors.next.id),
     });
   }
@@ -85,7 +86,7 @@ export function buildEpisodeNavigationRows(
     rows.push(row);
   }
   rows.push([
-    { text: "📋 Barcha qismlar", callback_data: episodeListCallback(currentId) },
+    { text: t("episode.all"), callback_data: episodeListCallback(currentId) },
   ]);
   return rows;
 }
@@ -97,8 +98,8 @@ export type EpisodeListPage = {
 
 function episodeLine(episode: NavEpisode, multiSeason: boolean): string {
   const label = multiSeason
-    ? `${episode.seasonNumber}-fasl ${episode.episodeNumber}-qism`
-    : `${episode.episodeNumber}-qism`;
+    ? t("episode.labelSeason", { s: episode.seasonNumber, e: episode.episodeNumber })
+    : t("episode.label", { e: episode.episodeNumber });
   return episode.title ? `${label} — ${episode.title}` : label;
 }
 
@@ -110,7 +111,7 @@ export function buildEpisodeListPages(
 ): EpisodeListPage[] {
   const sorted = sortEpisodes(episodes);
   const multiSeason = new Set(sorted.map((e) => e.seasonNumber)).size > 1;
-  const header = `📺 ${seriesTitle}\nKod: ${seriesCode}\nJami: ${sorted.length} ta qism\n`;
+  const header = `📺 ${seriesTitle}\n${t("series.code", { code: seriesCode })}\n${t("series.total", { n: sorted.length })}\n`;
 
   const groups: NavEpisode[][] = [];
   let current: NavEpisode[] = [];

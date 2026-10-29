@@ -1,3 +1,4 @@
+import { LANG_BUTTON, translate, type Lang } from "./i18n";
 import type { ReplyMarkup } from "./keyboards";
 import type { MovieRequest, RequestsStore } from "./requests-store";
 
@@ -25,6 +26,8 @@ export type RequestDeps = {
   adminIds: () => string[];
   isAdmin: (userId: number) => boolean;
   log?: (message: string, err?: unknown) => void;
+  /** Foydalanuvchi tili: unga boradigan javoblar shu tilda, admin kartasida 🌐 belgisi. */
+  langOf?: (userId: number) => Lang;
   dailyLimit?: number;
   now?: () => number;
 };
@@ -68,10 +71,12 @@ function formatLocalTime(createdAt: string): string {
 export function buildRequestText(
   request: MovieRequest,
   resolvedByName?: string,
+  lang?: Lang,
 ): string {
   const lines = [
     `📥 Yangi so‘rov #${request.id}`,
     `🔎 «${request.query}»`,
+    ...(lang ? [`🌐 Til: ${LANG_BUTTON[lang]}`] : []),
     `👤 ${request.userName || "Noma’lum"} · ID ${request.userId}`,
     `🕒 ${formatLocalTime(request.createdAt)}`,
   ];
@@ -90,6 +95,7 @@ export function createRequestFlow(deps: RequestDeps) {
   const { api, store, target } = deps;
   const now = deps.now ?? Date.now;
   const limit = deps.dailyLimit ?? 3;
+  const langOf = deps.langOf ?? ((): Lang => "uz");
   const pendingComments = new Map<
     number,
     { requestId: number; chatId: string; threadId: number | null; expiresAt: number }
@@ -165,7 +171,7 @@ export function createRequestFlow(deps: RequestDeps) {
       return { status: "duplicate", id: request.id };
     }
 
-    const text = buildRequestText(request);
+    const text = buildRequestText(request, undefined, langOf(request.userId));
     const reply_markup = buildRequestKeyboard(request.id);
     if (target) {
       const messageId = await trySend(target.chatId, text, {
@@ -241,14 +247,21 @@ export function createRequestFlow(deps: RequestDeps) {
     }
     pendingComments.delete(query.fromId);
 
-    const userText =
-      status === "approved"
-        ? `✅ So‘ragan kinongiz qo‘shildi: «${request.query}»\nNomi yoki kodi bilan botdan qidirib ko‘ring.`
-        : `❌ Afsuski, «${request.query}» so‘rovi hozircha rad etildi.`;
+    const userLang = langOf(request.userId);
+    const userText = translate(
+      userLang,
+      status === "approved" ? "request.approved" : "request.rejected",
+      { q: request.query },
+    );
     const sent = await trySend(request.userId, userText);
 
     const updated = store.getRequest(request.id) ?? request;
-    await tryEdit(query.chatId, query.messageId, buildRequestText(updated, query.fromName), null);
+    await tryEdit(
+      query.chatId,
+      query.messageId,
+      buildRequestText(updated, query.fromName, langOf(request.userId)),
+      null,
+    );
     await answer(
       query.id,
       sent !== null
@@ -269,7 +282,7 @@ export function createRequestFlow(deps: RequestDeps) {
     const cleanNote = note.trim().slice(0, MAX_NOTE);
     const sent = await trySend(
       request.userId,
-      `📩 Admindan xabar (so‘rov: «${request.query}»):\n\n${cleanNote}`,
+      translate(langOf(request.userId), "request.adminNote", { q: request.query, note: cleanNote }),
     );
     store.saveRequestNote(request.id, cleanNote);
     pendingComments.delete(admin.id);

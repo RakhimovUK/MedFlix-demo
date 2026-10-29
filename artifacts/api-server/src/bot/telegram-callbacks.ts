@@ -46,7 +46,12 @@ import {
   handleVersionCommand,
 } from "./telegram-admin-ops";
 import { handleAddLanguageCallback, handleListCommand } from "./telegram-admin-commands";
-import { displayName } from "./telegram-user-commands";
+import {
+  displayName,
+  handleSetLanguageCallback,
+  sendLanguagePicker,
+} from "./telegram-user-commands";
+import { t } from "./i18n";
 import {
   getStartKeyboard,
   getSubscriptionKeyboard,
@@ -68,10 +73,7 @@ export async function handleEpisodeNavigationCallback(
   const episodeId = parseEpisodeId(data.slice(isList ? 4 : 3));
   const episode = episodeId === null ? null : findSeriesEpisodeById(episodeId);
   if (!episode) {
-    await answerCallbackQuery(
-      callbackQuery.id,
-      "Bu qism topilmadi yoki o‘chirilgan.",
-    );
+    await answerCallbackQuery(callbackQuery.id, t("episode.gone"));
     return true;
   }
 
@@ -121,7 +123,7 @@ export async function handleFavoriteToggleCallback(
 
   await answerCallbackQuery(
     callbackQuery.id,
-    state ? "⭐ Sevimlilarga qo‘shildi." : "Sevimlilardan olib tashlandi.",
+    state ? t("fav.added") : t("fav.removed"),
   );
 
   const rows = message.reply_markup?.inline_keyboard;
@@ -152,15 +154,13 @@ export async function handleNotifyToggleCallback(
   const code = encoded ? decodeCallbackValue(encoded) : null;
   const subscribed = code ? toggleSeriesSubscription(chatId, code) : null;
   if (!code || subscribed === null) {
-    await answerCallbackQuery(callbackQuery.id, "Serial topilmadi.");
+    await answerCallbackQuery(callbackQuery.id, t("series.notFoundShort"));
     return;
   }
 
   await answerCallbackQuery(
     callbackQuery.id,
-    subscribed
-      ? "🔔 Yangi qism chiqsa, xabar beramiz."
-      : "🔕 Xabar o‘chirildi.",
+    subscribed ? t("notify.on") : t("notify.off"),
   );
 
   const rows = message.reply_markup?.inline_keyboard;
@@ -263,23 +263,34 @@ export async function handleCallbackQueryInner(
   if (data === "subscription:check") {
     subscriptionCache.delete(userId);
     if (await isSubscribed(userId)) {
-      await answerCallbackQuery(callbackQuery.id, "Obuna tasdiqlandi.");
+      await answerCallbackQuery(callbackQuery.id, t("sub.confirmed"));
       await sendText(
         chatId,
-        "Rahmat. Endi kino kodi yoki nomini yuborishingiz mumkin.",
+        t("sub.thanks"),
         getStartKeyboard(),
       );
     } else {
       await answerCallbackQuery(
         callbackQuery.id,
-        "Hali barcha kanallarga obuna bo‘lmagansiz.",
+        t("sub.notYet"),
       );
       await sendText(
         chatId,
-        "Iltimos, barcha ko‘rsatilgan kanal va chatlarga obuna bo‘lib, qayta tekshiring.",
+        t("sub.pleaseAll"),
         getSubscriptionKeyboard(),
       );
     }
+    return;
+  }
+
+  if (data === "lang:menu") {
+    await answerCallbackQuery(callbackQuery.id);
+    await sendLanguagePicker(chatId, callbackQuery.from.language_code);
+    return;
+  }
+
+  if (data.startsWith("setlang:")) {
+    await handleSetLanguageCallback(callbackQuery, chatId, message.message_id);
     return;
   }
 
@@ -324,7 +335,7 @@ export async function handleCallbackQueryInner(
   if (data === "search:help") {
     await sendText(
       chatId,
-      "Kino kodini yoki nomini yuboring. Masalan: 101 yoki Interstellar",
+      t("search.help"),
     );
     return;
   }
@@ -332,7 +343,7 @@ export async function handleCallbackQueryInner(
   if (data.startsWith("genre:")) {
     const genreName = decodeCallbackValue(data.slice("genre:".length));
     if (!genreName) {
-      await sendText(chatId, "Janr ma’lumotini o‘qib bo‘lmadi.");
+      await sendText(chatId, t("error.badButton"));
       return;
     }
 
@@ -340,7 +351,7 @@ export async function handleCallbackQueryInner(
     await sendMovieResults(
       chatId,
       movies,
-      `${genreName} janridagi materiallar:`,
+      t("genre.header", { g: genreName }),
     );
     return;
   }
@@ -348,7 +359,7 @@ export async function handleCallbackQueryInner(
   if (data.startsWith("movie:")) {
     const code = decodeCallbackValue(data.slice("movie:".length));
     if (!code) {
-      await sendText(chatId, "Kino kodi ma’lumotini o‘qib bo‘lmadi.");
+      await sendText(chatId, t("error.badButton"));
       return;
     }
     aliasLearner.onSelect(chatId, "movie", code);
@@ -359,7 +370,7 @@ export async function handleCallbackQueryInner(
   if (data.startsWith("series:")) {
     const code = decodeCallbackValue(data.slice("series:".length));
     if (!code) {
-      await sendText(chatId, "Serial kodi ma’lumotini o‘qib bo‘lmadi.");
+      await sendText(chatId, t("error.badButton"));
       return;
     }
     aliasLearner.onSelect(chatId, "series", code);
@@ -381,7 +392,7 @@ export async function handleCallbackQueryInner(
       !Number.isInteger(seasonNumber) ||
       seasonNumber <= 0
     ) {
-      await sendText(chatId, "Serial fasli ma’lumotini o‘qib bo‘lmadi.");
+      await sendText(chatId, t("error.badButton"));
       return;
     }
     await sendSeriesSeasonEpisodes(chatId, code, seasonNumber);
@@ -415,7 +426,7 @@ export async function handleCallbackQueryInner(
       !Number.isInteger(episodeNumber) ||
       episodeNumber <= 0
     ) {
-      await sendText(chatId, "Serial qismi ma’lumotini o‘qib bo‘lmadi.");
+      await sendText(chatId, t("error.badButton"));
       return;
     }
     await deliverSeriesEpisode(chatId, code, seasonNumber, episodeNumber);

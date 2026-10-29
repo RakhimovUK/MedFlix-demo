@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export const CAPTION_LIMIT = 1024;
 
 export function normalizeDescription(raw: string | null | undefined): string | null {
@@ -36,11 +37,11 @@ export function buildSeriesCaption(input: {
   description: string | null;
 }): string {
   const footer = [
-    `🔢 Kod: ${input.code}`,
+    t("card.code", { code: input.code }),
     input.seasons.length === 1
-      ? `📂 ${input.seasons[0]}-fasl`
-      : `📂 Fasllar: ${input.seasons.length} ta`,
-    `🎬 ${input.episodeCount} ta qism`,
+      ? t("card.season", { s: input.seasons[0]! })
+      : t("card.seasons", { n: input.seasons.length }),
+    t("card.episodes", { n: input.episodeCount }),
   ].join("\n");
 
   const description = normalizeDescription(input.description);
@@ -56,7 +57,7 @@ export function buildMovieCaption(input: {
   code: string;
   description: string | null;
 }): string {
-  const footer = `🔢 Kod: ${input.code}`;
+  const footer = t("card.code", { code: input.code });
   const description = normalizeDescription(input.description);
   if (!description) {
     return `🎬 ${input.title.slice(0, 200)}\n\n${footer}`;

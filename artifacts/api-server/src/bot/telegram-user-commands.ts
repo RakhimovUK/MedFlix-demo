@@ -1,18 +1,44 @@
 import { isAdmin } from "./config";
-import { findMovie, findSeries, listUserSubscriptions } from "./database";
+import {
+  findCodeLangs,
+  findMovie,
+  findSeries,
+  listUserSubscriptions,
+  setUserLang,
+} from "./database";
+import {
+  LANG_BUTTON,
+  currentLang,
+  langName,
+  runWithLang,
+  suggestLangFromTelegram,
+  t,
+  translate,
+} from "./i18n";
+import { buildLanguagePicker, parseSetLangData } from "./language-picker";
+import { protectFor } from "./restriction-runtime";
+import { getStartKeyboard } from "./telegram-subscription";
+import { logger } from "../lib/logger";
 import { checkRequestText, describeGuardReason } from "./request-guard";
 import { groupHits, looksLikeCode, normalizeText, smartSearch } from "./smart-search";
 import { encodeCallbackValue } from "./keyboards";
-import type { CommandContext, TelegramUser } from "./telegram-types";
+import type {
+  CommandContext,
+  TelegramCallbackQuery,
+  TelegramUser,
+} from "./telegram-types";
 import {
   aliasLearner,
+  answerCallbackQuery,
   notifyAdminsOfError,
   requestFlow,
   searchStore,
   sendText,
+  telegramApi,
 } from "./telegram-state";
 import {
   deliverMovie,
+  getStartVideoReference,
   normalizeCode,
   sendContents,
   sendMovieResults,
@@ -25,8 +51,8 @@ export async function handleIdCommand(ctx: CommandContext): Promise<void> {
   await sendText(
     chatId,
     [
-      `Sizning Telegram ID raqamingiz: ${userId}`,
-      `Admin holati: ${isAdmin(userId) ? "tasdiqlangan" : "tasdiqlanmagan"}`,
+      t("id.yours", { id: userId }),
+      t("id.admin", { state: t(isAdmin(userId) ? "id.yes" : "id.no") }),
       ...(isAdmin(userId) && chatId < 0
         ? [`Chat ID: ${chatId}`, `Topic ID: ${message.message_thread_id ?? "yo‘q"}`]
         : []),
@@ -46,7 +72,7 @@ export async function handleSearchCommand(ctx: CommandContext): Promise<void> {
   if (!args) {
     await sendText(
       chatId,
-      "Qidirish uchun kino kodini yoki nomini yuboring. Masalan: /search Interstellar",
+      t("search.prompt"),
     );
     return;
   }
@@ -66,7 +92,7 @@ export async function handleSearchCommand(ctx: CommandContext): Promise<void> {
   await runSmartSearch(
     chatId,
     args,
-    "Kino topilmadi. Kod yoki nomni tekshirib qayta yuboring.",
+    t("notFound.generic"),
     { id: userId, name: displayName(message.from) },
   );
   return;
@@ -83,11 +109,31 @@ export async function handleNothingFound(
   notFoundText: string,
   requester?: { id: number; name: string },
 ): Promise<void> {
+  if (looksLikeCode(query)) {
+    await sendCodeNotFound(chatId, normalizeCode(query));
+    return;
+  }
   if (!requester || !checkRequestText(query).ok) {
-    await sendText(chatId, notFoundText);
+    await sendText(chatId, notFoundText, catalogButton());
     return;
   }
   await submitUserRequest(chatId, requester, query.trim(), normalizeText(query), true);
+}
+
+/** Ostida "📚 Katalog" tugmasi bo'lgan klaviatura. */
+export function catalogButton(): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  return { inline_keyboard: [[{ text: t("kb.contents"), callback_data: "catalog" }]] };
+}
+
+/** Kod foydalanuvchi tilida biriktirilmagan: qaysi tilda borligini aytadi va katalog tugmasini beradi. */
+export async function sendCodeNotFound(chatId: number, code: string): Promise<void> {
+  const lang = currentLang();
+  const others = findCodeLangs(code).filter((item) => item !== lang);
+  const lines = [t("notFound.code", { code, lang: langName(lang) })];
+  if (others.length > 0) {
+    lines.push("", t("notFound.otherLangs", { langs: others.map((item) => LANG_BUTTON[item]).join(", ") }));
+  }
+  await sendText(chatId, lines.join("\n"), catalogButton());
 }
 
 /**
@@ -154,19 +200,19 @@ export async function runSmartSearch(
   if (primary.length > 0) {
     await sendGroup(
       primary,
-      `«${query}» bo‘yicha topilgan materiallar:`,
-      `«${query}» bo‘yicha seriallar:`,
+      t("search.found", { q: query }),
+      t("search.foundSeries", { q: query }),
     );
   }
   if (genre.length > 0) {
     await sendGroup(
       genre,
-      `🎭 «${query}» janridagi kinolar:`,
-      `🎭 «${query}» janridagi seriallar:`,
+      t("search.genreMovies", { q: query }),
+      t("search.genreSeries", { q: query }),
     );
   }
   if (fuzzy.length > 0) {
-    await sendGroup(fuzzy, "Shuni nazarda tutdingizmi?", "Shuni nazarda tutdingizmi?");
+    await sendGroup(fuzzy, t("search.didYouMean"), t("search.didYouMean"));
   }
 }
 
@@ -200,14 +246,16 @@ export async function submitUserRequest(
   if (result.status === "duplicate") {
     await sendText(
       chatId,
-      `${auto ? "Bu kino hali topilmadi. " : ""}Bu so‘rovingiz adminlarga allaqachon yuborilgan. Javobni kuting — natija shu botga keladi.`,
+      `${auto ? t("request.notFoundPrefix") : ""}${t("request.duplicate")}`,
+      catalogButton(),
     );
     return;
   }
   if (result.status === "limited") {
     await sendText(
       chatId,
-      `${auto ? "Afsuski, bu kino topilmadi. " : ""}Bugungi so‘rovlar limitiga yetdingiz. Ertaga qayta urinib ko‘ring.`,
+      `${auto ? t("request.notFoundPrefix") : ""}${t("request.limited")}`,
+      catalogButton(),
     );
     return;
   }
@@ -219,9 +267,8 @@ export async function submitUserRequest(
   }
   await sendText(
     chatId,
-    auto
-      ? "Afsuski, bu kino topilmadi, lekin so‘rovingiz adminlarga yuborildi. Admin javobi shu botga keladi."
-      : `✅ So‘rovingiz adminlarga yuborildi: «${text}». Javob shu botga keladi.`,
+    auto ? t("request.sentAuto") : t("request.sent", { q: text }),
+    catalogButton(),
   );
 }
 
@@ -230,7 +277,7 @@ export async function handleRequestCommand(ctx: CommandContext): Promise<void> {
   if (!args) {
     await sendText(
       chatId,
-      ["Format: /request Kino nomi", "Masalan: /request Oltin qo‘llar"].join("\n"),
+      t("request.format"),
     );
     return;
   }
@@ -243,17 +290,121 @@ export async function handleMysubsCommand(ctx: CommandContext): Promise<void> {
   if (subscriptions.length === 0) {
     await sendText(
       ctx.chatId,
-      "Hozircha hech qaysi serialga obuna bo‘lmagansiz.\nSerial kartasidagi «🔔 Yangi qismlar haqida xabar ber» tugmasini bosing.",
+      t("mysubs.empty"),
     );
     return;
   }
 
-  await sendText(ctx.chatId, "🔔 Xabar oladigan seriallaringiz:", {
+  await sendText(ctx.chatId, t("mysubs.header"), {
     inline_keyboard: subscriptions.slice(0, 50).map((item) => [
       {
         text: `📺 ${item.title} (${item.code})`.slice(0, 64),
         callback_data: `series:${encodeCallbackValue(item.code)}`,
       },
     ]),
+  });
+}
+
+/** Kod bo'yicha serial yoki kinoni yuboradi (joriy tilda). Topilsa true. */
+export async function deliverByCode(chatId: number, code: string): Promise<boolean> {
+  if (!code) return false;
+  const series = findSeries(code);
+  if (series) {
+    await sendSeriesEpisodes(chatId, series.code);
+    return true;
+  }
+  const movie = findMovie(code);
+  if (movie) {
+    await deliverMovie(chatId, movie);
+    return true;
+  }
+  return false;
+}
+
+/** Start ekrani: start video (bo'lsa), salom matni va asosiy tugmalar. */
+export async function sendWelcome(chatId: number, userId: number): Promise<void> {
+  const lines = [t("start.welcome")];
+  if (isAdmin(userId)) {
+    lines.push(
+      "",
+      "Admin bo‘limi:",
+      "1) Kanal postini botga forward qiling",
+      "2) /add KOD | Kino nomi — 1-post",
+      "3) /addpost KOD | 2 | Kino fayli — qo‘shimcha post",
+      "4) /addseries KOD | Serial nomi",
+      "5) Har bir serial posti uchun /addpart KOD | FASL | QISM | Nomi",
+      "6) /setstart — start videosini o‘rnatish",
+      "7) /setstructure POST_LINK — struktura postini sozlash",
+      "8) /lang — ish tili (uz/ru/en)",
+      "/delete KOD",
+      "/deleteseries KOD",
+      "/list",
+    );
+  }
+
+  const startVideo = getStartVideoReference();
+  if (startVideo) {
+    try {
+      await telegramApi("copyMessage", {
+        chat_id: chatId,
+        ...protectFor(chatId),
+        from_chat_id: startVideo.channelChatId,
+        message_id: startVideo.channelMessageId,
+      });
+    } catch (err: unknown) {
+      logger.error({ err, chatId, ...startVideo }, "Failed to copy start video");
+    }
+  }
+
+  await sendText(chatId, lines.join("\n"), getStartKeyboard());
+}
+
+/** Til tanlash tugmalari (Telegram tili birinchi taklif qilinadi). */
+export async function sendLanguagePicker(
+  chatId: number,
+  telegramLanguageCode?: string,
+  payload?: string,
+): Promise<void> {
+  await sendText(
+    chatId,
+    t("lang.choose"),
+    buildLanguagePicker(suggestLangFromTelegram(telegramLanguageCode), payload),
+  );
+}
+
+/** "setlang:..." tugmasi: tilni saqlaydi, so'ng start ekrani yoki deep-link kodini yuboradi. */
+export async function handleSetLanguageCallback(
+  callbackQuery: TelegramCallbackQuery,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  const parsed = parseSetLangData(callbackQuery.data ?? "");
+  if (!parsed) {
+    await answerCallbackQuery(callbackQuery.id, t("error.unknownButton"));
+    return;
+  }
+  const userId = callbackQuery.from.id;
+  setUserLang(userId, parsed.lang);
+  await answerCallbackQuery(callbackQuery.id, LANG_BUTTON[parsed.lang]);
+  try {
+    await telegramApi("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text: translate(parsed.lang, "lang.set", { lang: LANG_BUTTON[parsed.lang] }),
+    });
+  } catch (err: unknown) {
+    logger.warn({ err, chatId }, "Failed to edit language picker");
+  }
+
+  // Qolgan ish yangi tanlangan tilda.
+  await runWithLang(parsed.lang, async () => {
+    if (parsed.payload && (await deliverByCode(chatId, parsed.payload))) {
+      return;
+    }
+    if (parsed.payload) {
+      await sendCodeNotFound(chatId, parsed.payload);
+      return;
+    }
+    await sendWelcome(chatId, userId);
   });
 }

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 type Button = { text: string; callback_data: string };
 type Keyboard = { inline_keyboard: Button[][] };
 
@@ -19,8 +20,8 @@ type Encode = (value: string) => string;
 
 const clip = (text: string) => text.slice(0, 64);
 
-export const NEW_HEADER = "🆕 So‘nggi qo‘shilganlar";
-export const TOP_HEADER = "🔥 Eng ko‘p ko‘rilganlar (oxirgi 30 kun)";
+export const newHeader = (): string => t("new.header");
+export const topHeader = (): string => t("top.header");
 
 export function buildNewKeyboard(
   movies: RecentMovie[],
@@ -30,7 +31,7 @@ export function buildNewKeyboard(
   const rows: Button[][] = [
     ...episodes.map((episode) => [
       {
-        text: clip(`📺 ${episode.seriesTitle} — ${episode.seasonNumber}-fasl ${episode.episodeNumber}-qism`),
+        text: clip(`📺 ${episode.seriesTitle} — ${t("episode.labelSeason", { s: episode.seasonNumber, e: episode.episodeNumber })}`),
         callback_data: `ep:${episode.id}`,
       },
     ]),

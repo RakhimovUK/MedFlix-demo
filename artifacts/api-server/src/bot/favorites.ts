@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 type Button = { text: string; callback_data?: string; url?: string };
 type Keyboard = { inline_keyboard: Button[][] };
 
@@ -5,19 +6,17 @@ export type FavoriteKind = "movie" | "series" | "episode";
 /** episode uchun `code` — qism ID raqami (matn ko'rinishida), `title` esa tayyor sarlavha. */
 export type FavoriteItem = { kind: FavoriteKind; code: string; title: string };
 
-export const FAVORITES_HEADER = "⭐ Sevimlilaringiz";
-export const FAVORITES_EMPTY =
-  "Hozircha sevimlilar yo‘q.\nKino yoki serial qismi ostidagi «⭐ Sevimlilarga qo‘shish» tugmasini bosing.";
+export const favoritesHeader = (): string => t("fav.header");
+export const favoritesEmpty = (): string => t("fav.empty");
 
 const PREFIX = "fav:";
 const KIND_CHAR: Record<FavoriteKind, string> = { movie: "m", series: "s", episode: "e" };
 const CHAR_KIND: Record<string, FavoriteKind> = { m: "movie", s: "series", e: "episode" };
 
-const LABELS: Record<FavoriteKind, { off: string; on: string }> = {
-  movie: { off: "⭐ Sevimlilarga qo‘shish", on: "✅ Sevimlilarda (olib tashlash)" },
-  series: { off: "⭐ Sevimlilarga qo‘shish", on: "✅ Sevimlilarda (olib tashlash)" },
-  episode: { off: "⭐ Qismni sevimlilarga qo‘shish", on: "✅ Sevimli qism (olib tashlash)" },
-};
+function label(kind: FavoriteKind, isFavorite: boolean): string {
+  if (kind === "episode") return t(isFavorite ? "fav.removeEpisode" : "fav.addEpisode");
+  return t(isFavorite ? "fav.remove" : "fav.add");
+}
 
 /** `ref`: kino/serial uchun base64 kod, qism uchun ID raqami. */
 export function buildFavoriteRow(
@@ -27,7 +26,7 @@ export function buildFavoriteRow(
 ): Button[] {
   return [
     {
-      text: isFavorite ? LABELS[kind].on : LABELS[kind].off,
+      text: label(kind, isFavorite),
       callback_data: `${PREFIX}${KIND_CHAR[kind]}:${ref}`,
     },
   ];

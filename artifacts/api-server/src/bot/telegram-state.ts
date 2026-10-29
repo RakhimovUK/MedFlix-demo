@@ -1,7 +1,7 @@
 import { createNavCleanup } from "./nav-cleanup";
 import { createTelegramApi } from "./telegram-api";
 import { createSearchStore } from "./search-store";
-import { getDatabase } from "./database";
+import { getDatabase, getUserLang } from "./database";
 import { createAliasLearner } from "./alias-learning";
 import { getAdminIds, getRequestsTopic, isAdmin } from "./config";
 import { createRequestFlow } from "./request-flow";
@@ -55,6 +55,7 @@ export const requestFlow = createRequestFlow({
   adminIds: getAdminIds,
   isAdmin,
   log: (message, err) => logger.warn({ err }, message),
+  langOf: (userId) => getUserLang(userId),
 });
 
 export const pendingBroadcasts = new Map<

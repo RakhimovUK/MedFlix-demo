@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export type EpisodeRef = { seasonNumber: number; episodeNumber: number };
 
 const NOTIFY_PREFIX = "ntf:";
@@ -22,9 +23,9 @@ export function formatNewEpisodeMessage(input: {
   episodeTitle?: string;
 }): string {
   const lines = [
-    "🔔 Yangi qism chiqdi!",
+    t("notify.newEpisode"),
     `📺 ${input.seriesTitle}`,
-    `${input.seasonNumber}-fasl, ${input.episodeNumber}-qism`,
+    t("notify.episode", { s: input.seasonNumber, e: input.episodeNumber }),
   ];
   if (input.episodeTitle) {
     lines.push(input.episodeTitle);
@@ -46,9 +47,7 @@ type Button = { text: string; callback_data?: string; url?: string };
 export function buildNotifyRow(encodedCode: string, subscribed: boolean): Button[] {
   return [
     {
-      text: subscribed
-        ? "🔕 Xabarni o‘chirish"
-        : "🔔 Yangi qismlar haqida xabar ber",
+      text: subscribed ? t("notify.unsubscribe") : t("notify.subscribe"),
       callback_data: `${NOTIFY_PREFIX}${encodedCode}`,
     },
   ];

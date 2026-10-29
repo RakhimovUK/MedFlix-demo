@@ -63,11 +63,20 @@ Qarorlar (o'zgartirma):
 - Kanal postlari (tizim posti, mundarija) `telegram-structure.ts` da doim `uz` (`PUBLIC_LANG`).
 - Yangi kod yozganda: tilni parametr bilan uzatma, `currentLang()` ishlat; fon ishlari (taymer) kontekstsiz = `uz`.
 
+## Foydalanuvchi tili va matnlar (10–12-vazifalar, bajarildi)
+- `i18n.ts`: til konteksti (`currentLang`, `runWithLang`) va barcha foydalanuvchi matnlari `t("key", {vars})`, uz/ru/en.
+  Yangi foydalanuvchi matnini faqat shu yerga qo'sh (test uchala til yozilganini tekshiradi). Admin matnlari o'zbekcha qoladi.
+- `/start`: til tanlanmagan bo'lsa (obunadan ham oldin) til tugmalari (`language-picker.ts`, `setlang:<til>[:kod]`);
+  deep-link kodi tugmada saqlanadi. `/language` va "🌐 Til" tugmasi (`lang:menu`) — tilni o'zgartirish.
+  Eski foydalanuvchilar `/start` bosmaguncha `uz` da ishlayveradi.
+- Kod topilmasa: "«1» kodi … tilida hali biriktirilmagan" + boshqa tillarda bo'lsa aytiladi + 📚 Katalog tugmasi.
+  Nom topilmasa avtomatik so'rov (avvalgidek) + 📚 Katalog. Admin so'rov kartasida 🌐 foydalanuvchi tili;
+  ✅/❌/izoh javoblari foydalanuvchi tilida (`request-flow.ts`, `langOf`).
+- `/catalog`: `uz` uchun kanal mundarija postlari, `ru/en` uchun inline katalog.
+- Testlar: `pnpm test` endi `tests/resolve-ts.mjs` orqali kengaytmasiz importlarni ham ochadi.
+
 ## Navbat
-10. "Kod topilmadi" javobi (til nomi bilan) + 📚 Katalog tugmasi; so'rov adminga 🌐 til bilan.
-11. `/start` da til tanlash (🇺🇿/🇷🇺/🇬🇧, Telegram `language_code` taklif), `/language`, menyu 3 tilda.
-    Shungacha oddiy foydalanuvchilar hammasi `uz`. `/catalog` mundarija postlari ham faqat `uz` — ru/en uchun inline katalog kerak.
-12. Qolgan xabarlar 3 tilda (2–3 bo'lak). 13. Mini post (synopsis) va "Haqida" tugmasi.
+13. Mini post (synopsis) va "Haqida" tugmasi (Gemini matni, admin tasdig'idan keyin).
 
 ## 1 oylik reja
 - 1-hafta: 3–6-vazifalar (til asosi, baza migratsiyasi). Har migratsiyadan oldin zaxira.

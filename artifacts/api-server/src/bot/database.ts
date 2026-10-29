@@ -2,7 +2,10 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MovieLang } from "./post-language";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { currentLang, runWithLang } from "./i18n";
+
+// Til konteksti i18n.ts da; eski importlar uchun shu yerdan ham eksport qilinadi.
+export { currentLang, runWithLang };
 
 export type Movie = {
   id: number;
@@ -48,21 +51,6 @@ const databasePath = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
   : path.resolve(process.cwd(), "data", "kino-bot.sqlite");
 mkdirSync(path.dirname(databasePath), { recursive: true });
-
-/**
- * Joriy update tili. Har bir Telegram update foydalanuvchi tanlagan til bilan ishlanadi
- * (`runWithLang`); kod bo'yicha kino/serial qidiruvi shu tilga bog'lanadi,
- * shuning uchun bir xil kod har tilda alohida kino bo'lishi mumkin. Kontekst yo'q -> "uz".
- */
-const langStorage = new AsyncLocalStorage<MovieLang>();
-
-export function currentLang(): MovieLang {
-  return langStorage.getStore() ?? "uz";
-}
-
-export function runWithLang<T>(lang: MovieLang, fn: () => T): T {
-  return langStorage.run(lang, fn);
-}
 
 const database = new DatabaseSync(databasePath);
 // cur_lang(): joriy update tili (lang-context.ts). SQL'da kod bo'yicha qidiruvni tilga bog'laydi.
@@ -1392,4 +1380,15 @@ export function setSetting(key: string, value: string): void {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
     .run(key, value);
+}
+/** Kod qaysi tillarda bor (kino yoki serial), uz-ru-en tartibida. */
+export function findCodeLangs(code: string): MovieLang[] {
+  const rows = database
+    .prepare(
+      `SELECT lang FROM movies WHERE code = ?
+       UNION SELECT lang FROM series WHERE code = ?`,
+    )
+    .all(code, code) as Array<Record<string, unknown>>;
+  const found = new Set(rows.map((row) => String(row.lang)));
+  return (["uz", "ru", "en"] as MovieLang[]).filter((lang) => found.has(lang));
 }

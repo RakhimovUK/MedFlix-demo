@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import {
   buildStartKeyboard,
   buildSubscriptionKeyboard,
@@ -70,11 +71,7 @@ export async function requireSubscription(
 
   await sendText(
     chatId,
-    [
-      "Botdan foydalanish uchun avval kanal va muhokama chatiga obuna bo‘ling.",
-      "",
-      "Obuna bo‘lgach, «✅ Tekshirish» tugmasini bosing.",
-    ].join("\n"),
+    t("sub.required"),
     getSubscriptionKeyboard(),
   );
   return false;
