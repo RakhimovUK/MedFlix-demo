@@ -39,6 +39,7 @@ export function createSearchStore(db: DatabaseSync) {
            FROM movies
            LEFT JOIN movie_genres ON movie_genres.movie_id = movies.id
            LEFT JOIN genres ON genres.id = movie_genres.genre_id
+           WHERE movies.lang = 'uz'
            GROUP BY movies.id`,
         )
         .all() as Row[]

@@ -1,3 +1,4 @@
+import { CATALOG_LANG } from "./catalog-lang";
 import { protectFor } from "./restriction-runtime";
 import {
   findMovie,
@@ -82,7 +83,7 @@ export function commandParts(text: string): { command: string; args: string } {
 }
 
 export function formatMovieList(): string {
-  const movies = listMovies();
+  const movies = listMovies(CATALOG_LANG);
   const series = listSeries();
   if (movies.length === 0 && series.length === 0) {
     return "Hozircha bazada kino yo‘q.";
@@ -114,7 +115,7 @@ export function catalogKeyboard(
 
 /** "Katalog" tugmasi: baza kanaldagi Mundarija postlarini (contents_posts) nusxalab yuboradi. */
 export async function sendContents(chatId: number): Promise<void> {
-  const movies = listMovies();
+  const movies = listMovies(CATALOG_LANG);
   const series = listSeries();
   if (movies.length === 0 && series.length === 0) {
     await sendText(chatId, "Katalog hozircha bo‘sh.");
@@ -153,7 +154,7 @@ export async function sendContents(chatId: number): Promise<void> {
 }
 
 export async function sendCatalog(chatId: number): Promise<void> {
-  const movies = listMovies();
+  const movies = listMovies(CATALOG_LANG);
   const series = listSeries();
   const genres = listGenres();
   const lines = [
@@ -475,7 +476,7 @@ export function trackView(kind: "movie" | "episode", id: number, chatId: number)
 
 export async function sendNewContent(chatId: number): Promise<void> {
   const keyboard = buildNewKeyboard(
-    listMovies().slice(0, 5),
+    listMovies(CATALOG_LANG).slice(0, 5),
     listRecentEpisodes(5),
     encodeCallbackValue,
   );

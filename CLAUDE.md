@@ -38,6 +38,8 @@ Kod tartibi va sub-kodlar (1.A), qism navigatsiyasi, mundarija (5 post + ochiq k
 aqlli qidiruv, `/alias`, avtomatik so'rov, telegram.ts bo'linishi, `/restrict`,
 til 1-vazifa (bot profili uz/ru/en), til 2-vazifa (`post-language.ts`), til 4-vazifa (`movies.lang`, UNIQUE(lang, code); eski kinolar `uz`;
 migratsiyadan oldin `<baza>.before-lang.bak` zaxira; database.ts funksiyalarida `lang` parametri, default `uz`).
+til 3-vazifa (`/add`: postda bitta til -> avtomatik; ko'p/yo'q -> `addlang:` tugmalari, `add-language.ts`;
+foydalanuvchi katalogi hozircha `CATALOG_LANG = "uz"` (`catalog-lang.ts`), 7–8-vazifada foydalanuvchi tili bilan almashtiriladi).
 
 ## Asosiy maqsad: bitta botda 3 til (uz / ru / en)
 Foydalanuvchi tilni tanlaydi; bot faqat shu tildagi kontentni beradi. Bir xil kod (masalan `1`)
@@ -52,8 +54,7 @@ Qarorlar (o'zgartirma):
 - Poster va caption Gemini orqali tayyorlanadi; mini post (synopsis) admin tasdig'idan keyin ko'rinadi.
 
 ## Navbat (tartib bilan, har biri alohida kichik commit)
-(4-vazifa bajarildi, 3-dan oldin qilindi: tanlangan tilni saqlash uchun baza kerak edi.)
-3. Ko'p tilli/belgisiz post uchun admin tanlovi (`decidePostLanguage` ni `telegram.ts` post oqimiga ulash; kutilayotgan post mexanizmi).
+(3- va 4-vazifalar bajarildi.)
 5. `series`, `series_episodes`, `genres`, `movie_posts` ga `lang`.
 6. `bot_users.lang`, `getUserLang/setUserLang`.
 7. Qidiruv foydalanuvchi tilida. 8. Yetkazish, tugmalar, sevimlilar, progress tilga bog'liq.
@@ -72,3 +73,4 @@ Qarorlar (o'zgartirma):
 - Telegram bot nusxa ikkita bo'lmasin. Token faqat Secrets'da.
 - `telegram.ts` ga yangi mantiq qo'shma: mos `telegram-*.ts` modulga qo'y.
 - Sandboxda `@types/node` yo'q bo'lishi mumkin: typecheck'ni bazaviy xatolar bilan solishtir.
+- `/addpost`, `/genre`, `/setposter`, `/delete` hozircha faqat `uz` kinoga ishlaydi; 9-vazifada admin ish tili (`/lang`) bilan tuzatiladi.

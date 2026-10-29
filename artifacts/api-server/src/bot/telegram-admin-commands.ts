@@ -31,6 +31,16 @@ import { logger } from "../lib/logger";
 import { formatEditPartsResult, parseEditParts } from "./admin-tools";
 import { looksLikeCode, normalizeText } from "./smart-search";
 import { parsePostText } from "./post-parser";
+import { decidePostLanguage, type MovieLang } from "./post-language";
+import {
+  LANG_LABELS,
+  buildLanguageChoiceKeyboard,
+  createPendingAddStore,
+  languageQuestionText,
+  parseAddLangData,
+  type PendingAdd,
+} from "./add-language";
+import type { TelegramCallbackQuery } from "./telegram-types";
 import type { CommandContext } from "./telegram-types";
 import {
   formatMovieList,
@@ -38,7 +48,9 @@ import {
   normalizeCode,
   notifyNewEpisode,
 } from "./telegram-delivery";
+import { isAdmin } from "./config";
 import {
+  answerCallbackQuery,
   pendingForwardedPosts,
   pendingPosterRequests,
   searchStore,
@@ -771,12 +783,12 @@ export async function handleAddCommand(ctx: CommandContext): Promise<void> {
   const channelMessageId =
     Number(rawMessageId) || referencedForward?.channelMessageId || 0;
   // Post matnidan nom va janr avtomatik olinadi; /add KOD | Nom berilsa, nom foydalanuvchiniki.
-  const parsedPost = parsePostText(
+  const postText =
     (referencedForward as { text?: string } | undefined)?.text ||
-      message.reply_to_message?.caption ||
-      message.reply_to_message?.text ||
-      message.caption,
-  );
+    message.reply_to_message?.caption ||
+    message.reply_to_message?.text ||
+    message.caption;
+  const parsedPost = parsePostText(postText);
   const title = rawTitle || parsedPost.title || "";
 
   if (
@@ -804,37 +816,118 @@ export async function handleAddCommand(ctx: CommandContext): Promise<void> {
     return;
   }
 
-  const movie = upsertMovie({
+  pendingForwardedPosts.delete(String(userId));
+  const entry: PendingAdd = {
     code,
     title,
     channelChatId,
     channelMessageId,
+    genres: parsedPost.genres,
+    options: [],
+  };
+
+  // Til faqat postdagi "Til:/Язык:/Language:" belgisidan. Aks holda admin tanlaydi.
+  const decision = decidePostLanguage(postText);
+  if (decision.kind === "auto") {
+    await saveAddedMovie(chatId, entry, decision.lang, true);
+    return;
+  }
+
+  entry.options = decision.options;
+  pendingAddLanguage.set(userId, entry);
+  await sendText(
+    chatId,
+    languageQuestionText(entry, decision.reason),
+    buildLanguageChoiceKeyboard(decision.options),
+  );
+}
+
+/** Admin kutilayotgan /add uchun til tugmasini bosdi. */
+export const pendingAddLanguage = createPendingAddStore();
+
+export async function handleAddLanguageCallback(
+  callbackQuery: TelegramCallbackQuery,
+  chatId: number,
+  messageId: number,
+): Promise<void> {
+  const userId = callbackQuery.from.id;
+  const choice = parseAddLangData(callbackQuery.data ?? "");
+  if (!isAdmin(userId) || !choice) {
+    await answerCallbackQuery(callbackQuery.id, "Bu tugma faqat admin uchun.");
+    return;
+  }
+
+  const entry = pendingAddLanguage.take(userId);
+  const closeQuestion = async (text: string) => {
+    try {
+      await telegramApi("editMessageText", { chat_id: chatId, message_id: messageId, text });
+    } catch (err: unknown) {
+      logger.warn({ err, chatId }, "Failed to close language question");
+    }
+  };
+
+  if (!entry) {
+    await answerCallbackQuery(callbackQuery.id, "Muddati o‘tgan. /add ni qayta yuboring.");
+    await closeQuestion("⌛ Muddati o‘tgan. Postni qayta forward qilib, /add yuboring.");
+    return;
+  }
+  if (choice === "cancel") {
+    await answerCallbackQuery(callbackQuery.id, "Bekor qilindi.");
+    await closeQuestion(`❌ ${entry.code} — ${entry.title}: qo‘shish bekor qilindi.`);
+    return;
+  }
+  if (entry.options.length > 0 && !entry.options.includes(choice)) {
+    pendingAddLanguage.set(userId, entry);
+    await answerCallbackQuery(callbackQuery.id, "Bu til taklif qilinmagan.");
+    return;
+  }
+
+  await answerCallbackQuery(callbackQuery.id, LANG_LABELS[choice]);
+  await closeQuestion(`${entry.code} — ${entry.title}\n🌐 Til tanlandi: ${LANG_LABELS[choice]}`);
+  await saveAddedMovie(chatId, entry, choice, false);
+}
+
+async function saveAddedMovie(
+  chatId: number,
+  entry: PendingAdd,
+  lang: MovieLang,
+  detected: boolean,
+): Promise<void> {
+  const existed = Boolean(findMovie(entry.code, lang));
+  const movie = upsertMovie({
+    code: entry.code,
+    lang,
+    title: entry.title,
+    channelChatId: entry.channelChatId,
+    channelMessageId: entry.channelMessageId,
   });
-  pendingForwardedPosts.delete(String(userId));
 
   // Janr postdan avtomatik saqlanadi (mavjud janr nomining yozilishi saqlanadi).
   let savedGenres: string[] = [];
-  if (parsedPost.genres.length > 0) {
+  if (entry.genres.length > 0) {
     const known = new Map(
       listGenres().map((genre) => [genre.name.toLocaleLowerCase("uz"), genre.name]),
     );
-    savedGenres = parsedPost.genres.map(
+    savedGenres = entry.genres.map(
       (genre) => known.get(genre.toLocaleLowerCase("uz")) ?? genre,
     );
-    setMovieGenres(movie.code, savedGenres);
+    setMovieGenres(movie.code, savedGenres, lang);
   }
 
   await refreshStructurePost();
   await sendText(
     chatId,
     [
-      `${movie.code} — ${movie.title} bazaga saqlandi.`,
+      `${movie.code} — ${movie.title} bazaga ${existed ? "qayta saqlandi (yangilandi)" : "saqlandi"}.`,
+      `🌐 Til: ${LANG_LABELS[lang]}${detected ? " (postdan aniqlandi)" : ""}`,
       savedGenres.length > 0
         ? `🎭 Janr: ${savedGenres.join(", ")}`
         : `Janr aniqlanmadi. Kerak bo‘lsa: /genre ${movie.code} | Janr 1, Janr 2`,
+      ...(lang !== "uz"
+        ? ["", "ℹ️ Bu tildagi kinolar foydalanuvchilarga til tanlash qo‘shilgach ko‘rinadi."]
+        : []),
     ].join("\n"),
   );
-  return;
 }
 
 export async function handleAddpostCommand(ctx: CommandContext): Promise<void> {

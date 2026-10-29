@@ -1,3 +1,4 @@
+import { CATALOG_LANG } from "./catalog-lang";
 import { parseEpisodeId } from "./series-navigation";
 import {
   findMovie,
@@ -44,7 +45,7 @@ import {
   handleStatsCommand,
   handleVersionCommand,
 } from "./telegram-admin-ops";
-import { handleListCommand } from "./telegram-admin-commands";
+import { handleAddLanguageCallback, handleListCommand } from "./telegram-admin-commands";
 import { displayName } from "./telegram-user-commands";
 import {
   getStartKeyboard,
@@ -244,6 +245,11 @@ export async function handleCallbackQueryInner(
     return;
   }
 
+  if (data.startsWith("addlang:")) {
+    await handleAddLanguageCallback(callbackQuery, chatId, message.message_id);
+    return;
+  }
+
   if (data.startsWith("bc:")) {
     await handleBroadcastCallback(callbackQuery, message);
     return;
@@ -330,7 +336,7 @@ export async function handleCallbackQueryInner(
       return;
     }
 
-    const movies = listMoviesByGenre(genreName);
+    const movies = listMoviesByGenre(genreName, CATALOG_LANG);
     await sendMovieResults(
       chatId,
       movies,

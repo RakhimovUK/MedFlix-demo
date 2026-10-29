@@ -1,3 +1,4 @@
+import { CATALOG_LANG } from "./catalog-lang";
 import {
   buildContentsPages,
   formatTelegramPostLink,
@@ -85,7 +86,7 @@ export function getPublicContentsPostReferences(): TelegramPostReference[] {
 }
 
 export function formatStructurePost(): string {
-  const movies = listMovies();
+  const movies = listMovies(CATALOG_LANG);
   const series = listSeries();
   const genres = listGenres();
   const startVideoConfigured = Boolean(
@@ -97,7 +98,7 @@ export function formatStructurePost(): string {
   const usedPages = Math.max(
     1,
     Math.min(
-      buildContentsPages(listMovies(), listSeries(), botInfo.username).length,
+      buildContentsPages(listMovies(CATALOG_LANG), listSeries(), botInfo.username).length,
       contentsRefs.length,
     ),
   );
@@ -162,7 +163,7 @@ export function formatStructurePost(): string {
 }
 
 export async function refreshContentsPost(): Promise<boolean> {
-  const pages = buildContentsPages(listMovies(), listSeries(), botInfo.username);
+  const pages = buildContentsPages(listMovies(CATALOG_LANG), listSeries(), botInfo.username);
   const baseOk = await updateContentsPosts(
     getContentsPostReferences(),
     pages,
