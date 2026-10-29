@@ -10,8 +10,12 @@ import {
   findSeriesEpisode,
   getSeriesPoster,
   getSeriesPosterCaption,
+  getUserLang,
   listGenres,
+  listMovies,
+  listSeries,
   listSeriesEpisodes,
+  setUserLang,
   setMovieGenres,
   setSetting,
   updateSeriesEpisodeTitle,
@@ -31,7 +35,7 @@ import { logger } from "../lib/logger";
 import { formatEditPartsResult, parseEditParts } from "./admin-tools";
 import { looksLikeCode, normalizeText } from "./smart-search";
 import { parsePostText } from "./post-parser";
-import { decidePostLanguage, type MovieLang } from "./post-language";
+import { decidePostLanguage, normalizeLangToken, type MovieLang } from "./post-language";
 import {
   LANG_LABELS,
   buildLanguageChoiceKeyboard,
@@ -987,4 +991,40 @@ export async function handleAddpostCommand(ctx: CommandContext): Promise<void> {
     `${code} kodi uchun ${postNumber}-post saqlandi. Kod yuborilganda barcha postlar tartib bilan yuboriladi.`,
   );
   return;
+}
+
+/** /lang [uz|ru|en] — admin qaysi til bazasi bilan ishlashini tanlaydi. */
+export async function handleLangCommand(ctx: CommandContext): Promise<void> {
+  const { chatId, userId, args } = ctx;
+  const current = getUserLang(userId);
+  const counts = (["uz", "ru", "en"] as MovieLang[])
+    .map((lang) => `${LANG_LABELS[lang]}: ${listMovies(lang).length} kino, ${listSeries(lang).length} serial`)
+    .join("\n");
+
+  if (!args.trim()) {
+    await sendText(
+      chatId,
+      [
+        `🌐 Joriy ish tili: ${LANG_LABELS[current]}`,
+        "",
+        counts,
+        "",
+        "O‘zgartirish: /lang uz | /lang ru | /lang en",
+        "Tanlangan tilda ishlaydi: /addpost, /addseries, /addpart, /genre, /setposter, /delete, qidiruv va katalog.",
+        "/add esa tilni postdagi «Til:» belgisidan oladi (yoki tugma bilan so‘raydi).",
+      ].join("\n"),
+    );
+    return;
+  }
+
+  const lang = normalizeLangToken(args);
+  if (!lang) {
+    await sendText(chatId, "Til noma’lum. Masalan: /lang en (uz, ru, en).");
+    return;
+  }
+  setUserLang(userId, lang);
+  await sendText(
+    chatId,
+    `✅ Ish tili: ${LANG_LABELS[lang]}\nEndi admin buyruqlari, qidiruv va katalog shu til bazasida ishlaydi.`,
+  );
 }

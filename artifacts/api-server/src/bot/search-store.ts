@@ -39,7 +39,7 @@ export function createSearchStore(db: DatabaseSync) {
            FROM movies
            LEFT JOIN movie_genres ON movie_genres.movie_id = movies.id
            LEFT JOIN genres ON genres.id = movie_genres.genre_id
-           WHERE movies.lang = 'uz'
+           WHERE movies.lang = cur_lang()
            GROUP BY movies.id`,
         )
         .all() as Row[]
@@ -49,7 +49,7 @@ export function createSearchStore(db: DatabaseSync) {
       genres: row.genres ? String(row.genres).split("\u001f") : [],
     }));
     const series = (
-      db.prepare("SELECT code, title FROM series").all() as Row[]
+      db.prepare("SELECT code, title FROM series WHERE lang = cur_lang()").all() as Row[]
     ).map((row) => ({ code: String(row.code), title: String(row.title) }));
     return { movies, series };
   }

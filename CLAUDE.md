@@ -10,7 +10,7 @@ repoda qiladi (1 oy sinov muddati). Replit faqat botni ishga tushirish uchun qol
 - "Push qilinganmi?" deb so'rama. Muammo aytilmasa push qilingan deb hisobla. Push'ni o'zing bajar.
 - Har o'zgarishdan oldin shuni tekshir: `pnpm --filter @workspace/api-server test` va
   `pnpm run typecheck` o'tishi shart. Yiqilsa commit qilma.
-- Faqat `main` shoxiga kichik, tushunarli commitlar (o'zbekcha xabar).
+- Push: har kichik o'zgarishda emas — 3–4 vazifani birga qilib, bitta push (o'zbekcha commit xabari).
 - Token va sirlarni fayllarga yozma (`TELEGRAM_BOT_TOKEN` faqat Replit Secrets'da). Repo ochiq.
 - Mavjud ma'lumotlarni buzadigan o'zgarishdan oldin zaxira (`/backup`) va migratsiya testi bo'lsin.
 - Telefon orqali ishlaydi: qo'lda nusxalanadigan buyruq berish kerak bo'lsa, bloklar ≤120 qator.
@@ -39,7 +39,7 @@ aqlli qidiruv, `/alias`, avtomatik so'rov, telegram.ts bo'linishi, `/restrict`,
 til 1-vazifa (bot profili uz/ru/en), til 2-vazifa (`post-language.ts`), til 4-vazifa (`movies.lang`, UNIQUE(lang, code); eski kinolar `uz`;
 migratsiyadan oldin `<baza>.before-lang.bak` zaxira; database.ts funksiyalarida `lang` parametri, default `uz`).
 til 3-vazifa (`/add`: postda bitta til -> avtomatik; ko'p/yo'q -> `addlang:` tugmalari, `add-language.ts`;
-foydalanuvchi katalogi hozircha `CATALOG_LANG = "uz"` (`catalog-lang.ts`), 7–8-vazifada foydalanuvchi tili bilan almashtiriladi).
+til 5–9-vazifalar (pastda "Til arxitekturasi").
 
 ## Asosiy maqsad: bitta botda 3 til (uz / ru / en)
 Foydalanuvchi tilni tanlaydi; bot faqat shu tildagi kontentni beradi. Bir xil kod (masalan `1`)
@@ -53,12 +53,20 @@ Qarorlar (o'zgartirma):
 - Kod shu tilda yo'q bo'lsa: "«1» kodi 🇬🇧 English tilida hali biriktirilmagan…" + 📚 Katalog tugmasi, admin so'roviga 🌐 til belgisi.
 - Poster va caption Gemini orqali tayyorlanadi; mini post (synopsis) admin tasdig'idan keyin ko'rinadi.
 
-## Navbat (tartib bilan, har biri alohida kichik commit)
-(3- va 4-vazifalar bajarildi.)
-5. `series`, `series_episodes`, `genres`, `movie_posts` ga `lang`.
-6. `bot_users.lang`, `getUserLang/setUserLang`.
-7. Qidiruv foydalanuvchi tilida. 8. Yetkazish, tugmalar, sevimlilar, progress tilga bog'liq.
-9. Admin ish tili `/lang`. 10. "Kod topilmadi" javobi. 11. `/start` da til tanlash, `/language`, menyu 3 tilda.
+## Til arxitekturasi (5–9-vazifalar, bajarildi)
+- `movies` va `series`: `lang` ustuni, UNIQUE(lang, code). Qismlar, postlar, janr bog'lanishi id orqali tilga ergashadi.
+- Har Telegram update `runWithLang(getUserLang(senderId), ...)` ichida ishlanadi (`telegram.ts` polling).
+  `database.ts`: `currentLang()` (AsyncLocalStorage) va SQL funksiya `cur_lang()`; kod bo'yicha barcha
+  qidiruvlar (`findMovie`, `findSeries`, poster, sevimlilar, top, janr soni, qidiruv katalogi) joriy tilda.
+- `bot_users.lang`: NULL = tanlamagan -> `uz`. `getUserLang/setUserLang/getStoredUserLang`.
+- Admin `/lang uz|ru|en` — o'z tilini o'zgartiradi; admin buyruqlari, qidiruv, katalog shu tilda. `/add` tilni postdan oladi.
+- Kanal postlari (tizim posti, mundarija) `telegram-structure.ts` da doim `uz` (`PUBLIC_LANG`).
+- Yangi kod yozganda: tilni parametr bilan uzatma, `currentLang()` ishlat; fon ishlari (taymer) kontekstsiz = `uz`.
+
+## Navbat
+10. "Kod topilmadi" javobi (til nomi bilan) + 📚 Katalog tugmasi; so'rov adminga 🌐 til bilan.
+11. `/start` da til tanlash (🇺🇿/🇷🇺/🇬🇧, Telegram `language_code` taklif), `/language`, menyu 3 tilda.
+    Shungacha oddiy foydalanuvchilar hammasi `uz`. `/catalog` mundarija postlari ham faqat `uz` — ru/en uchun inline katalog kerak.
 12. Qolgan xabarlar 3 tilda (2–3 bo'lak). 13. Mini post (synopsis) va "Haqida" tugmasi.
 
 ## 1 oylik reja
@@ -73,4 +81,3 @@ Qarorlar (o'zgartirma):
 - Telegram bot nusxa ikkita bo'lmasin. Token faqat Secrets'da.
 - `telegram.ts` ga yangi mantiq qo'shma: mos `telegram-*.ts` modulga qo'y.
 - Sandboxda `@types/node` yo'q bo'lishi mumkin: typecheck'ni bazaviy xatolar bilan solishtir.
-- `/addpost`, `/genre`, `/setposter`, `/delete` hozircha faqat `uz` kinoga ishlaydi; 9-vazifada admin ish tili (`/lang`) bilan tuzatiladi.

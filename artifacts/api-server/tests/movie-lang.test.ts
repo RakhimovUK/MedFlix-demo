@@ -38,6 +38,21 @@ old.exec(`
   );
   INSERT INTO movies (code, title, channel_chat_id, channel_message_id, poster_file_id)
     VALUES ('1', 'Eski kino', '-100', 11, 'PHOTO1'), ('2', 'Ikkinchi', '-100', 12, NULL);
+  CREATE TABLE series (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, poster_file_id TEXT, poster_caption TEXT
+  );
+  CREATE TABLE series_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, series_id INTEGER NOT NULL,
+    season_number INTEGER NOT NULL DEFAULT 1, episode_number INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '', channel_chat_id TEXT NOT NULL, channel_message_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (series_id, season_number, episode_number),
+    FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE
+  );
+  INSERT INTO series (code, title, poster_file_id) VALUES ('S1', 'Eski serial', 'SPHOTO');
+  INSERT INTO series_episodes (series_id, season_number, episode_number, title, channel_chat_id, channel_message_id)
+    VALUES (1, 1, 1, '1-qism', '-100', 31), (1, 1, 2, '2-qism', '-100', 32);
   INSERT INTO genres (name) VALUES ('Drama');
   INSERT INTO movie_genres VALUES (1, 1);
   INSERT INTO movie_posts (movie_id, post_number, title, channel_chat_id, channel_message_id)
@@ -115,4 +130,49 @@ test("o'chirish faqat shu tilni o'chiradi", () => {
   assert.equal(db.findMovie("1", "en"), null);
   assert.equal(db.findMovie("1")?.title, "Eski kino");
   assert.equal(db.deleteMovie("1", "en"), false);
+});
+
+test("serial migratsiyasi: eski seriallar uz, qismlar saqlanadi", () => {
+  const series = db.findSeries("S1");
+  assert.equal(series?.title, "Eski serial");
+  assert.equal(series?.episodeCount, 2);
+  assert.equal(db.getSeriesPoster("S1"), "SPHOTO");
+  assert.ok(existsSync(`${dbPath}.before-series-lang.bak`));
+});
+
+test("til konteksti: kod shu tildagi kino/serialga bog'lanadi", () => {
+  db.upsertMovie({ code: "7", lang: "ru", title: "Седьмой", channelChatId: "-300", channelMessageId: 70 });
+  assert.equal(db.findMovie("7"), null);
+  assert.equal(db.runWithLang("ru", () => db.findMovie("7"))?.title, "Седьмой");
+  assert.equal(db.runWithLang("ru", () => db.currentLang()), "ru");
+  assert.equal(db.currentLang(), "uz");
+
+  db.runWithLang("en", () => {
+    assert.equal(db.findSeries("S1"), null);
+    db.upsertSeries({ code: "S1", title: "Old series" });
+    db.upsertSeriesEpisode({ seriesCode: "S1", seasonNumber: 1, episodeNumber: 1, title: "Ep 1", channelChatId: "-200", channelMessageId: 41 });
+    assert.equal(db.findSeries("S1")?.episodeCount, 1);
+    assert.equal(db.getSeriesPoster("S1"), null);
+  });
+  assert.equal(db.findSeries("S1")?.title, "Eski serial");
+  assert.equal(db.findSeries("S1")?.episodeCount, 2);
+  assert.equal(db.listSeries("en").length, 1);
+  assert.equal(db.listSeries().length, 2);
+});
+
+test("janrlar soni joriy til bo'yicha", () => {
+  db.setMovieGenres("2", ["Drama"]);
+  const uzDrama = db.listGenres().find((g) => g.name === "Drama");
+  assert.equal(uzDrama?.movieCount, 2);
+  const enDrama = db.runWithLang("en", () => db.listGenres().find((g) => g.name === "Drama"));
+  assert.equal(enDrama?.movieCount, 0);
+});
+
+test("foydalanuvchi tili: tanlamagan bo'lsa uz", () => {
+  assert.equal(db.getStoredUserLang(555), null);
+  assert.equal(db.getUserLang(555), "uz");
+  db.setUserLang(555, "en");
+  assert.equal(db.getUserLang(555), "en");
+  db.touchBotUser(555);
+  assert.equal(db.getStoredUserLang(555), "en");
 });

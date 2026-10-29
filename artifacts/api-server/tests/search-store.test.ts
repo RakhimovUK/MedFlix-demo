@@ -5,11 +5,12 @@ import { createSearchStore } from "../src/bot/search-store.ts";
 
 test("katalog: kinolar janrlari bilan, seriallar alohida", () => {
   const db = new DatabaseSync(":memory:");
+  db.function("cur_lang", () => "uz");
   db.exec(`
     CREATE TABLE movies (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, title TEXT, lang TEXT NOT NULL DEFAULT 'uz');
     CREATE TABLE genres (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
     CREATE TABLE movie_genres (movie_id INTEGER, genre_id INTEGER);
-    CREATE TABLE series (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, title TEXT);
+    CREATE TABLE series (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, title TEXT, lang TEXT NOT NULL DEFAULT 'uz');
     INSERT INTO movies (code, title) VALUES ('1', 'Oltin qo''llar'), ('2', 'Janrsiz kino');
     INSERT INTO movies (code, title, lang) VALUES ('1', 'Golden hands', 'en');
     INSERT INTO genres (name) VALUES ('Drama'), ('Tibbiyot');

@@ -1,4 +1,5 @@
-import { CATALOG_LANG } from "./catalog-lang";
+/** Kanal postlari (tizim posti, mundarija) hozircha o'zbekcha katalog bo'yicha. */
+const PUBLIC_LANG = "uz" as const;
 import {
   buildContentsPages,
   formatTelegramPostLink,
@@ -6,7 +7,7 @@ import {
   type TelegramPostReference,
 } from "./catalog-content";
 import { getPostsChannelId, getRequiredSubscriptions } from "./config";
-import { getSetting, listGenres, listMovies, listSeries } from "./database";
+import { getSetting, listGenres, listMovies, listSeries, runWithLang } from "./database";
 import { logger } from "../lib/logger";
 import { parseStoredPostRefs } from "./contents-delivery";
 import { botInfo, telegramApi } from "./telegram-state";
@@ -86,8 +87,8 @@ export function getPublicContentsPostReferences(): TelegramPostReference[] {
 }
 
 export function formatStructurePost(): string {
-  const movies = listMovies(CATALOG_LANG);
-  const series = listSeries();
+  const movies = listMovies(PUBLIC_LANG);
+  const series = listSeries(PUBLIC_LANG);
   const genres = listGenres();
   const startVideoConfigured = Boolean(
     getSetting("start_channel_chat_id") &&
@@ -98,7 +99,7 @@ export function formatStructurePost(): string {
   const usedPages = Math.max(
     1,
     Math.min(
-      buildContentsPages(listMovies(CATALOG_LANG), listSeries(), botInfo.username).length,
+      buildContentsPages(listMovies(PUBLIC_LANG), listSeries(PUBLIC_LANG), botInfo.username).length,
       contentsRefs.length,
     ),
   );
@@ -162,8 +163,12 @@ export function formatStructurePost(): string {
   ].join("\n");
 }
 
-export async function refreshContentsPost(): Promise<boolean> {
-  const pages = buildContentsPages(listMovies(CATALOG_LANG), listSeries(), botInfo.username);
+export function refreshContentsPost(): Promise<boolean> {
+  return runWithLang(PUBLIC_LANG, () => refreshContentsPostInner());
+}
+
+async function refreshContentsPostInner(): Promise<boolean> {
+  const pages = buildContentsPages(listMovies(PUBLIC_LANG), listSeries(PUBLIC_LANG), botInfo.username);
   const baseOk = await updateContentsPosts(
     getContentsPostReferences(),
     pages,
@@ -251,13 +256,21 @@ async function updateContentsPosts(
   return allOk;
 }
 
-export async function refreshStructurePost(): Promise<boolean> {
+export function refreshStructurePost(): Promise<boolean> {
+  return runWithLang(PUBLIC_LANG, () => refreshStructurePostInner());
+}
+
+async function refreshStructurePostInner(): Promise<boolean> {
   const structureUpdated = await updateStructurePost();
   await refreshContentsPost();
   return structureUpdated;
 }
 
-export async function updateStructurePost(): Promise<boolean> {
+export function updateStructurePost(): Promise<boolean> {
+  return runWithLang(PUBLIC_LANG, () => updateStructurePostInner());
+}
+
+async function updateStructurePostInner(): Promise<boolean> {
   const reference = getStructurePostReference();
 
   try {

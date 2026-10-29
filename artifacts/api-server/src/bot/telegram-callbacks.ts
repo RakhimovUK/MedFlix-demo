@@ -1,4 +1,3 @@
-import { CATALOG_LANG } from "./catalog-lang";
 import { parseEpisodeId } from "./series-navigation";
 import {
   findMovie,
@@ -6,6 +5,7 @@ import {
   listMoviesByGenre,
   toggleFavorite,
   toggleSeriesSubscription,
+  currentLang,
 } from "./database";
 import { shouldCleanup } from "./nav-cleanup";
 import { buildFavoriteRow, parseFavoriteData, replaceFavoriteRow } from "./favorites";
@@ -336,7 +336,7 @@ export async function handleCallbackQueryInner(
       return;
     }
 
-    const movies = listMoviesByGenre(genreName, CATALOG_LANG);
+    const movies = listMoviesByGenre(genreName, currentLang());
     await sendMovieResults(
       chatId,
       movies,

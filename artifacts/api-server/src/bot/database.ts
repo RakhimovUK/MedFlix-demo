@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { MovieLang } from "./post-language";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 export type Movie = {
   id: number;
@@ -48,7 +49,24 @@ const databasePath = process.env.DATABASE_PATH
   : path.resolve(process.cwd(), "data", "kino-bot.sqlite");
 mkdirSync(path.dirname(databasePath), { recursive: true });
 
+/**
+ * Joriy update tili. Har bir Telegram update foydalanuvchi tanlagan til bilan ishlanadi
+ * (`runWithLang`); kod bo'yicha kino/serial qidiruvi shu tilga bog'lanadi,
+ * shuning uchun bir xil kod har tilda alohida kino bo'lishi mumkin. Kontekst yo'q -> "uz".
+ */
+const langStorage = new AsyncLocalStorage<MovieLang>();
+
+export function currentLang(): MovieLang {
+  return langStorage.getStore() ?? "uz";
+}
+
+export function runWithLang<T>(lang: MovieLang, fn: () => T): T {
+  return langStorage.run(lang, fn);
+}
+
 const database = new DatabaseSync(databasePath);
+// cur_lang(): joriy update tili (lang-context.ts). SQL'da kod bo'yicha qidiruvni tilga bog'laydi.
+database.function("cur_lang", { deterministic: false }, () => currentLang());
 
 /** Qo'shimcha saqlash qatlamlari (requests-store.ts, search-store.ts) shu bazadan foydalanadi. */
 export function getDatabase(): DatabaseSync {
@@ -262,6 +280,45 @@ if (!movieColumns.some((column) => column.name === "lang")) {
   `);
 }
 
+// Serial tili: (lang, code) noyob. Mavjud seriallar "uz".
+const seriesLangColumns = database
+  .prepare("PRAGMA table_info(series)")
+  .all() as Array<Record<string, unknown>>;
+if (!seriesLangColumns.some((column) => column.name === "lang")) {
+  const existing = database.prepare("SELECT COUNT(*) AS n FROM series").get() as
+    | Record<string, unknown>
+    | undefined;
+  if (Number(existing?.n ?? 0) > 0) {
+    try {
+      database.prepare("VACUUM INTO ?").run(`${databasePath}.before-series-lang.bak`);
+    } catch {
+      // zaxira allaqachon bor bo'lsa, davom etamiz
+    }
+  }
+  database.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN IMMEDIATE;
+    CREATE TABLE series_migrated (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL,
+      lang TEXT NOT NULL DEFAULT 'uz',
+      title TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      poster_file_id TEXT,
+      poster_caption TEXT,
+      UNIQUE (lang, code)
+    );
+    INSERT INTO series_migrated
+      (id, code, lang, title, created_at, poster_file_id, poster_caption)
+    SELECT id, code, 'uz', title, created_at, poster_file_id, poster_caption
+    FROM series;
+    DROP TABLE series;
+    ALTER TABLE series_migrated RENAME TO series;
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
 database.exec(`
   CREATE TABLE IF NOT EXISTS series_progress (
     chat_id INTEGER NOT NULL,
@@ -330,7 +387,7 @@ function mapMoviePost(row: Record<string, unknown>): MoviePost {
   };
 }
 
-export function findMovie(code: string, lang: MovieLang = "uz"): Movie | null {
+export function findMovie(code: string, lang: MovieLang = currentLang()): Movie | null {
   const row = database
     .prepare(
       `SELECT id, code, lang, title, channel_chat_id, channel_message_id, created_at
@@ -373,7 +430,7 @@ export function searchMovies(query: string, lang?: MovieLang): Movie[] {
   return rows.map(mapMovie);
 }
 
-export function listMoviePosts(movieCode: string, lang: MovieLang = "uz"): MoviePost[] {
+export function listMoviePosts(movieCode: string, lang: MovieLang = currentLang()): MoviePost[] {
   const rows = database
     .prepare(
       `SELECT movie_posts.id, movie_posts.movie_id, movie_posts.post_number,
@@ -397,7 +454,7 @@ export function findSeries(code: string): Series | null {
               COUNT(DISTINCT series_episodes.season_number) AS season_count
        FROM series
        LEFT JOIN series_episodes ON series_episodes.series_id = series.id
-       WHERE series.code = ?
+       WHERE series.code = ? AND series.lang = cur_lang()
        GROUP BY series.id`,
     )
     .get(code) as Record<string, unknown> | undefined;
@@ -405,7 +462,7 @@ export function findSeries(code: string): Series | null {
   return row ? mapSeries(row) : null;
 }
 
-export function searchSeries(query: string): Series[] {
+export function searchSeries(query: string, lang?: MovieLang): Series[] {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) {
     return [];
@@ -419,18 +476,19 @@ export function searchSeries(query: string): Series[] {
               COUNT(DISTINCT series_episodes.season_number) AS season_count
        FROM series
        LEFT JOIN series_episodes ON series_episodes.series_id = series.id
-       WHERE series.code LIKE ? OR series.title LIKE ?
+       WHERE (series.code LIKE ? OR series.title LIKE ?) AND (? IS NULL OR series.lang = ?)
        GROUP BY series.id
        ORDER BY CASE WHEN series.code = ? THEN 0 ELSE 1 END,
                 series.title COLLATE NOCASE
        LIMIT 25`,
     )
-    .all(pattern, pattern, normalizedQuery) as Record<string, unknown>[];
+    .all(pattern, pattern, lang ?? null, lang ?? null, normalizedQuery) as Record<string, unknown>[];
 
   return rows.map(mapSeries);
 }
 
-export function listSeries(): Series[] {
+/** lang berilmasa — barcha tillar; berilsa faqat shu til. */
+export function listSeries(lang?: MovieLang): Series[] {
   const rows = database
     .prepare(
       `SELECT series.id, series.code, series.title, series.created_at,
@@ -438,10 +496,11 @@ export function listSeries(): Series[] {
               COUNT(DISTINCT series_episodes.season_number) AS season_count
        FROM series
        LEFT JOIN series_episodes ON series_episodes.series_id = series.id
+       WHERE (? IS NULL OR series.lang = ?)
        GROUP BY series.id
        ORDER BY series.id DESC`,
     )
-    .all() as Record<string, unknown>[];
+    .all(lang ?? null, lang ?? null) as Record<string, unknown>[];
 
   return rows.map(mapSeries);
 }
@@ -449,8 +508,8 @@ export function listSeries(): Series[] {
 export function upsertSeries(input: { code: string; title: string }): Series {
   database
     .prepare(
-      `INSERT INTO series (code, title) VALUES (?, ?)
-       ON CONFLICT(code) DO UPDATE SET title = excluded.title`,
+      `INSERT INTO series (code, lang, title) VALUES (?, cur_lang(), ?)
+       ON CONFLICT(lang, code) DO UPDATE SET title = excluded.title`,
     )
     .run(input.code, input.title);
 
@@ -463,7 +522,7 @@ export function listSeriesSeasons(seriesCode: string): number[] {
       `SELECT DISTINCT series_episodes.season_number
        FROM series_episodes
        INNER JOIN series ON series.id = series_episodes.series_id
-       WHERE series.code = ?
+       WHERE series.code = ? AND series.lang = cur_lang()
        ORDER BY series_episodes.season_number`,
     )
     .all(seriesCode) as Record<string, unknown>[];
@@ -482,7 +541,7 @@ export function listSeriesEpisodes(
               series_episodes.channel_message_id, series_episodes.created_at
        FROM series_episodes
        INNER JOIN series ON series.id = series_episodes.series_id
-       WHERE series.code = ? AND series_episodes.season_number = ?
+       WHERE series.code = ? AND series.lang = cur_lang() AND series_episodes.season_number = ?
        ORDER BY series_episodes.episode_number`
     : `SELECT series_episodes.id, series_episodes.series_id,
               series_episodes.season_number, series_episodes.episode_number,
@@ -490,7 +549,7 @@ export function listSeriesEpisodes(
               series_episodes.channel_message_id, series_episodes.created_at
        FROM series_episodes
        INNER JOIN series ON series.id = series_episodes.series_id
-       WHERE series.code = ?
+       WHERE series.code = ? AND series.lang = cur_lang()
        ORDER BY series_episodes.season_number, series_episodes.episode_number`;
   const rows = database.prepare(query).all(
     ...(seasonNumber ? [seriesCode, seasonNumber] : [seriesCode]),
@@ -514,7 +573,7 @@ export function findSeriesEpisode(
               series_episodes.created_at
        FROM series_episodes
        INNER JOIN series ON series.id = series_episodes.series_id
-       WHERE series.code = ? AND series_episodes.season_number = ?
+       WHERE series.code = ? AND series.lang = cur_lang() AND series_episodes.season_number = ?
          AND series_episodes.episode_number = ?`,
     )
     .get(seriesCode, seasonNumber, episodeNumber) as
@@ -595,7 +654,7 @@ export function updateSeriesEpisodeTitle(
     .prepare(
       `UPDATE series_episodes SET title = ?
        WHERE season_number = ? AND episode_number = ?
-         AND series_id = (SELECT id FROM series WHERE code = ?)`,
+         AND series_id = (SELECT id FROM series WHERE code = ? AND lang = cur_lang())`,
     )
     .run(title, seasonNumber, episodeNumber, seriesCode);
 
@@ -621,6 +680,33 @@ const botUserColumns = database
   .all() as Array<{ name: string }>;
 if (!botUserColumns.some((column) => column.name === "blocked")) {
   database.exec("ALTER TABLE bot_users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0");
+}
+if (!botUserColumns.some((column) => column.name === "lang")) {
+  // NULL = foydalanuvchi hali til tanlamagan (o'zbekcha ishlaydi).
+  database.exec("ALTER TABLE bot_users ADD COLUMN lang TEXT");
+}
+
+/** Foydalanuvchi tanlagan til; tanlamagan bo'lsa null. */
+export function getStoredUserLang(chatId: number): MovieLang | null {
+  const row = database
+    .prepare("SELECT lang FROM bot_users WHERE chat_id = ?")
+    .get(chatId) as Record<string, unknown> | undefined;
+  const value = row?.lang;
+  return value === "uz" || value === "ru" || value === "en" ? value : null;
+}
+
+/** Foydalanuvchi ishlaydigan til (tanlamagan bo'lsa "uz"). */
+export function getUserLang(chatId: number): MovieLang {
+  return getStoredUserLang(chatId) ?? "uz";
+}
+
+export function setUserLang(chatId: number, lang: MovieLang): void {
+  database
+    .prepare(
+      `INSERT INTO bot_users (chat_id, lang) VALUES (?, ?)
+       ON CONFLICT(chat_id) DO UPDATE SET lang = excluded.lang`,
+    )
+    .run(chatId, lang);
 }
 
 export function touchBotUser(chatId: number): void {
@@ -711,7 +797,7 @@ export function updateSeriesEpisodeTitles(
 export function clearSeriesPoster(seriesCode: string): boolean {
   const result = database
     .prepare(
-      "UPDATE series SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND poster_file_id IS NOT NULL",
+      "UPDATE series SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND lang = cur_lang() AND poster_file_id IS NOT NULL",
     )
     .run(seriesCode);
   return Number(result.changes) > 0;
@@ -724,7 +810,7 @@ export function setSeriesPoster(
 ): boolean {
   const result = database
     .prepare(
-      "UPDATE series SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ?",
+      "UPDATE series SET poster_file_id = ?, poster_caption = COALESCE(?, poster_caption) WHERE code = ? AND lang = cur_lang()",
     )
     .run(fileId, caption, seriesCode);
   return Number(result.changes) > 0;
@@ -732,7 +818,7 @@ export function setSeriesPoster(
 
 export function getSeriesPoster(seriesCode: string): string | null {
   const row = database
-    .prepare("SELECT poster_file_id FROM series WHERE code = ?")
+    .prepare("SELECT poster_file_id FROM series WHERE code = ? AND lang = cur_lang()")
     .get(seriesCode) as Record<string, unknown> | undefined;
   const value = row?.poster_file_id;
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -740,13 +826,13 @@ export function getSeriesPoster(seriesCode: string): string | null {
 
 export function getSeriesPosterCaption(seriesCode: string): string | null {
   const row = database
-    .prepare("SELECT poster_caption FROM series WHERE code = ?")
+    .prepare("SELECT poster_caption FROM series WHERE code = ? AND lang = cur_lang()")
     .get(seriesCode) as Record<string, unknown> | undefined;
   const value = row?.poster_caption;
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-export function clearMoviePoster(movieCode: string, lang: MovieLang = "uz"): boolean {
+export function clearMoviePoster(movieCode: string, lang: MovieLang = currentLang()): boolean {
   const result = database
     .prepare(
       "UPDATE movies SET poster_file_id = NULL, poster_caption = NULL WHERE code = ? AND lang = ? AND poster_file_id IS NOT NULL",
@@ -759,7 +845,7 @@ export function setMoviePoster(
   movieCode: string,
   fileId: string,
   caption: string | null = null,
-  lang: MovieLang = "uz",
+  lang: MovieLang = currentLang(),
 ): boolean {
   const result = database
     .prepare(
@@ -769,7 +855,7 @@ export function setMoviePoster(
   return Number(result.changes) > 0;
 }
 
-export function getMoviePoster(movieCode: string, lang: MovieLang = "uz"): string | null {
+export function getMoviePoster(movieCode: string, lang: MovieLang = currentLang()): string | null {
   const row = database
     .prepare("SELECT poster_file_id FROM movies WHERE code = ? AND lang = ?")
     .get(movieCode, lang) as Record<string, unknown> | undefined;
@@ -777,7 +863,7 @@ export function getMoviePoster(movieCode: string, lang: MovieLang = "uz"): strin
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function getMoviePosterCaption(movieCode: string, lang: MovieLang = "uz"): string | null {
+export function getMoviePosterCaption(movieCode: string, lang: MovieLang = currentLang()): string | null {
   const row = database
     .prepare("SELECT poster_caption FROM movies WHERE code = ? AND lang = ?")
     .get(movieCode, lang) as Record<string, unknown> | undefined;
@@ -811,7 +897,7 @@ export function getSeriesProgress(
        FROM series_progress
        INNER JOIN series ON series.id = series_progress.series_id
        INNER JOIN series_episodes ON series_episodes.id = series_progress.episode_id
-       WHERE series_progress.chat_id = ? AND series.code = ?`,
+       WHERE series_progress.chat_id = ? AND series.code = ? AND series.lang = cur_lang()`,
     )
     .get(chatId, seriesCode) as Record<string, unknown> | undefined;
 
@@ -825,7 +911,7 @@ export function isSeriesSubscribed(chatId: number, seriesCode: string): boolean 
     .prepare(
       `SELECT 1 FROM series_subscriptions
        INNER JOIN series ON series.id = series_subscriptions.series_id
-       WHERE series_subscriptions.chat_id = ? AND series.code = ?`,
+       WHERE series_subscriptions.chat_id = ? AND series.code = ? AND series.lang = cur_lang()`,
     )
     .get(chatId, seriesCode);
   return row !== undefined;
@@ -837,7 +923,7 @@ export function toggleSeriesSubscription(
   seriesCode: string,
 ): boolean | null {
   const series = database
-    .prepare("SELECT id FROM series WHERE code = ?")
+    .prepare("SELECT id FROM series WHERE code = ? AND lang = cur_lang()")
     .get(seriesCode) as { id: number } | undefined;
   if (!series) {
     return null;
@@ -861,7 +947,7 @@ export function listSeriesSubscribers(seriesCode: string): number[] {
     .prepare(
       `SELECT series_subscriptions.chat_id FROM series_subscriptions
        INNER JOIN series ON series.id = series_subscriptions.series_id
-       WHERE series.code = ? ORDER BY series_subscriptions.created_at, series_subscriptions.chat_id`,
+       WHERE series.code = ? AND series.lang = cur_lang() ORDER BY series_subscriptions.created_at, series_subscriptions.chat_id`,
     )
     .all(seriesCode) as Array<{ chat_id: number }>;
   return rows.map((row) => row.chat_id);
@@ -871,7 +957,7 @@ export function removeSeriesSubscriber(chatId: number, seriesCode: string): void
   database
     .prepare(
       `DELETE FROM series_subscriptions WHERE chat_id = ?
-       AND series_id = (SELECT id FROM series WHERE code = ?)`,
+       AND series_id = (SELECT id FROM series WHERE code = ? AND lang = cur_lang())`,
     )
     .run(chatId, seriesCode);
 }
@@ -918,12 +1004,12 @@ export function listTopContent(
       `SELECT kind, code, title, viewers FROM (
          SELECT 'movie' AS kind, movies.code AS code, movies.title AS title, COUNT(*) AS viewers
          FROM content_views INNER JOIN movies ON movies.id = content_views.content_id
-         WHERE content_views.kind = 'movie' AND content_views.day >= ?
+         WHERE content_views.kind = 'movie' AND content_views.day >= ? AND movies.lang = cur_lang()
          GROUP BY movies.id
          UNION ALL
          SELECT 'series', series.code, series.title, COUNT(*)
          FROM content_views INNER JOIN series ON series.id = content_views.content_id
-         WHERE content_views.kind = 'series' AND content_views.day >= ?
+         WHERE content_views.kind = 'series' AND content_views.day >= ? AND series.lang = cur_lang()
          GROUP BY series.id
        ) ORDER BY viewers DESC, title COLLATE NOCASE LIMIT ?`,
     )
@@ -948,7 +1034,7 @@ export function listRecentEpisodes(limit = 5): Array<{
       `SELECT series_episodes.id AS id, series.code AS series_code, series.title AS series_title,
               series_episodes.season_number AS season_number, series_episodes.episode_number AS episode_number
        FROM series_episodes INNER JOIN series ON series.id = series_episodes.series_id
-       WHERE series_episodes.id = (
+       WHERE series.lang = cur_lang() AND series_episodes.id = (
          SELECT e2.id FROM series_episodes e2 WHERE e2.series_id = series_episodes.series_id
          ORDER BY e2.season_number DESC, e2.episode_number DESC LIMIT 1
        )
@@ -980,7 +1066,7 @@ function resolveContentId(kind: FavoriteKind, ref: string): number | null {
 
   const table = kind === "movie" ? "movies" : "series";
   const row = database
-    .prepare(`SELECT id FROM ${table} WHERE code = ?`)
+    .prepare(`SELECT id FROM ${table} WHERE code = ? AND lang = cur_lang()`)
     .get(ref) as { id: number } | undefined;
   return row ? Number(row.id) : null;
 }
@@ -1031,11 +1117,11 @@ export function listFavorites(
       `SELECT kind, code, title FROM (
          SELECT 'movie' AS kind, movies.code AS code, movies.title AS title, favorites.rowid AS ord
          FROM favorites INNER JOIN movies ON movies.id = favorites.content_id
-         WHERE favorites.chat_id = ? AND favorites.kind = 'movie'
+         WHERE favorites.chat_id = ? AND favorites.kind = 'movie' AND movies.lang = cur_lang()
          UNION ALL
          SELECT 'series', series.code, series.title, favorites.rowid
          FROM favorites INNER JOIN series ON series.id = favorites.content_id
-         WHERE favorites.chat_id = ? AND favorites.kind = 'series'
+         WHERE favorites.chat_id = ? AND favorites.kind = 'series' AND series.lang = cur_lang()
          UNION ALL
          SELECT 'episode', CAST(series_episodes.id AS TEXT),
                 series.title || ' — ' || series_episodes.season_number || '-fasl ' ||
@@ -1044,7 +1130,7 @@ export function listFavorites(
          FROM favorites
          INNER JOIN series_episodes ON series_episodes.id = favorites.content_id
          INNER JOIN series ON series.id = series_episodes.series_id
-         WHERE favorites.chat_id = ? AND favorites.kind = 'episode'
+         WHERE favorites.chat_id = ? AND favorites.kind = 'episode' AND series.lang = cur_lang()
        ) ORDER BY ord DESC LIMIT ?`,
     )
     .all(chatId, chatId, chatId, limit) as Array<{ kind: string; code: string; title: string }>;
@@ -1056,7 +1142,7 @@ export function listFavorites(
 }
 
 export function deleteSeries(code: string): boolean {
-  const result = database.prepare("DELETE FROM series WHERE code = ?").run(code);
+  const result = database.prepare("DELETE FROM series WHERE code = ? AND lang = cur_lang()").run(code);
   return result.changes > 0;
 }
 
@@ -1068,7 +1154,7 @@ export function deleteSeriesEpisode(
   const result = database
     .prepare(
       `DELETE FROM series_episodes
-       WHERE series_id = (SELECT id FROM series WHERE code = ?)
+       WHERE series_id = (SELECT id FROM series WHERE code = ? AND lang = cur_lang())
          AND season_number = ?
          AND episode_number = ?`,
     )
@@ -1085,7 +1171,7 @@ export function getLastDeliveredEpisodeMessage(
       `SELECT series_last_delivery.message_id
        FROM series_last_delivery
        INNER JOIN series ON series.id = series_last_delivery.series_id
-       WHERE series_last_delivery.chat_id = ? AND series.code = ?`,
+       WHERE series_last_delivery.chat_id = ? AND series.code = ? AND series.lang = cur_lang()`,
     )
     .get(chatId, seriesCode) as Record<string, unknown> | undefined;
 
@@ -1098,7 +1184,7 @@ export function setLastDeliveredEpisodeMessage(
   messageId: number,
 ): void {
   const series = database
-    .prepare("SELECT id FROM series WHERE code = ?")
+    .prepare("SELECT id FROM series WHERE code = ? AND lang = cur_lang()")
     .get(seriesCode) as Record<string, unknown> | undefined;
   if (!series) {
     return;
@@ -1118,9 +1204,10 @@ export function setLastDeliveredEpisodeMessage(
 export function listGenres(): Array<{ name: string; movieCount: number }> {
   const rows = database
     .prepare(
-      `SELECT genres.name, COUNT(movie_genres.movie_id) AS movie_count
+      `SELECT genres.name, COUNT(movies.id) AS movie_count
        FROM genres
        LEFT JOIN movie_genres ON movie_genres.genre_id = genres.id
+       LEFT JOIN movies ON movies.id = movie_genres.movie_id AND movies.lang = cur_lang()
        GROUP BY genres.id
        ORDER BY genres.name COLLATE NOCASE`,
     )
@@ -1152,7 +1239,7 @@ export function listMoviesByGenre(genreName: string, lang?: MovieLang): Movie[] 
 export function setMovieGenres(
   code: string,
   genreNames: string[],
-  lang: MovieLang = "uz",
+  lang: MovieLang = currentLang(),
 ): boolean {
   const movie = findMovie(code, lang);
   if (!movie) {
@@ -1205,7 +1292,7 @@ export function upsertMovie(input: {
   channelChatId: string;
   channelMessageId: number;
 }): Movie {
-  const lang = input.lang ?? "uz";
+  const lang = input.lang ?? currentLang();
   database
     .prepare(
       `INSERT INTO movies (code, lang, title, channel_chat_id, channel_message_id)
@@ -1252,7 +1339,7 @@ export function upsertMoviePost(input: {
   channelChatId: string;
   channelMessageId: number;
 }): MoviePost | null {
-  const lang = input.lang ?? "uz";
+  const lang = input.lang ?? currentLang();
   const movie = findMovie(input.movieCode, lang);
   if (!movie) {
     return null;
@@ -1283,7 +1370,7 @@ export function upsertMoviePost(input: {
   );
 }
 
-export function deleteMovie(code: string, lang: MovieLang = "uz"): boolean {
+export function deleteMovie(code: string, lang: MovieLang = currentLang()): boolean {
   const result = database
     .prepare("DELETE FROM movies WHERE code = ? AND lang = ?")
     .run(code, lang);

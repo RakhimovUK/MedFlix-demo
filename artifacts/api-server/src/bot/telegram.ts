@@ -1,7 +1,15 @@
 import { protectFor } from "./restriction-runtime";
 import { isAdmin } from "./config";
 import { parsePostText } from "./post-parser";
-import { findMovie, findSeries, getSetting, setSetting, touchBotUser } from "./database";
+import {
+  findMovie,
+  findSeries,
+  getSetting,
+  getUserLang,
+  runWithLang,
+  setSetting,
+  touchBotUser,
+} from "./database";
 import { logger } from "../lib/logger";
 import { buildAdminPanelKeyboard } from "./admin-panel";
 import type { CommandContext, TelegramMessage, TelegramUpdate } from "./telegram-types";
@@ -70,6 +78,7 @@ import {
   handleSetposterCommand,
   handleSetstartCommand,
   handleSetstructureCommand,
+  handleLangCommand,
 } from "./telegram-admin-commands";
 import { handleCallbackQuery } from "./telegram-callbacks";
 import { configureBotCommands, configureBotProfile } from "./telegram-menu";
@@ -279,6 +288,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         command === "/stats" ||
         command === "/broadcast" ||
         command === "/backup" ||
+        command === "/lang" ||
         command === "/version" ||
         command === "/admin" ||
         command === "/setposter" ||
@@ -374,6 +384,11 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
     if (command === "/backup") {
       await handleBackupCommand(ctx);
+      return;
+    }
+
+    if (command === "/lang") {
+      await handleLangCommand(ctx);
       return;
     }
 
@@ -496,16 +511,20 @@ async function poll(): Promise<void> {
             update.callback_query?.from.id ??
             update.update_id,
         );
-        void updateQueue.run(queueKey, async () => {
-          if (update.message) {
-            if (update.message.chat.id > 0) touchBotUser(update.message.chat.id);
-            await handleMessage(update.message);
-          }
-          if (update.callback_query) {
-            touchBotUser(update.callback_query.from.id);
-            await handleCallbackQuery(update.callback_query);
-          }
-        });
+        // Har update foydalanuvchi tanlagan til bilan ishlanadi (kod -> shu tildagi kino).
+        const langOwner = senderId ?? Number(queueKey);
+        void updateQueue.run(queueKey, () =>
+          runWithLang(getUserLang(langOwner), async () => {
+            if (update.message) {
+              if (update.message.chat.id > 0) touchBotUser(update.message.chat.id);
+              await handleMessage(update.message);
+            }
+            if (update.callback_query) {
+              touchBotUser(update.callback_query.from.id);
+              await handleCallbackQuery(update.callback_query);
+            }
+          }),
+        );
       }
       await updateQueue.waitForCapacity(200);
     } catch (err: unknown) {

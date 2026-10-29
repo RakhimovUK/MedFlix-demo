@@ -1,4 +1,3 @@
-import { CATALOG_LANG } from "./catalog-lang";
 import { protectFor } from "./restriction-runtime";
 import {
   findMovie,
@@ -29,6 +28,7 @@ import {
   saveSeriesProgress,
   setLastDeliveredEpisodeMessage,
   upsertSeriesEpisode,
+  currentLang,
 } from "./database";
 import {
   buildCatalogKeyboard,
@@ -83,8 +83,8 @@ export function commandParts(text: string): { command: string; args: string } {
 }
 
 export function formatMovieList(): string {
-  const movies = listMovies(CATALOG_LANG);
-  const series = listSeries();
+  const movies = listMovies(currentLang());
+  const series = listSeries(currentLang());
   if (movies.length === 0 && series.length === 0) {
     return "Hozircha bazada kino yo‘q.";
   }
@@ -115,8 +115,8 @@ export function catalogKeyboard(
 
 /** "Katalog" tugmasi: baza kanaldagi Mundarija postlarini (contents_posts) nusxalab yuboradi. */
 export async function sendContents(chatId: number): Promise<void> {
-  const movies = listMovies(CATALOG_LANG);
-  const series = listSeries();
+  const movies = listMovies(currentLang());
+  const series = listSeries(currentLang());
   if (movies.length === 0 && series.length === 0) {
     await sendText(chatId, "Katalog hozircha bo‘sh.");
     return;
@@ -154,8 +154,8 @@ export async function sendContents(chatId: number): Promise<void> {
 }
 
 export async function sendCatalog(chatId: number): Promise<void> {
-  const movies = listMovies(CATALOG_LANG);
-  const series = listSeries();
+  const movies = listMovies(currentLang());
+  const series = listSeries(currentLang());
   const genres = listGenres();
   const lines = [
     "🎬 MedFlix katalogi",
@@ -476,7 +476,7 @@ export function trackView(kind: "movie" | "episode", id: number, chatId: number)
 
 export async function sendNewContent(chatId: number): Promise<void> {
   const keyboard = buildNewKeyboard(
-    listMovies(CATALOG_LANG).slice(0, 5),
+    listMovies(currentLang()).slice(0, 5),
     listRecentEpisodes(5),
     encodeCallbackValue,
   );
