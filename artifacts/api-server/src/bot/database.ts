@@ -56,6 +56,11 @@ const database = new DatabaseSync(databasePath);
 // cur_lang(): joriy update tili (lang-context.ts). SQL'da kod bo'yicha qidiruvni tilga bog'laydi.
 database.function("cur_lang", { deterministic: false }, () => currentLang());
 
+/** Baza fayli qayerda (/stats da ko'rsatiladi: Railway Volume ichidami yoki yo'qmi). */
+export function getDatabasePath(): string {
+  return databasePath;
+}
+
 /** Qo'shimcha saqlash qatlamlari (requests-store.ts, search-store.ts) shu bazadan foydalanadi. */
 export function getDatabase(): DatabaseSync {
   return database;
@@ -719,9 +724,21 @@ export function getBotStats(): {
   moviePosts: number;
   series: number;
   episodes: number;
+  moviesByLang: Record<string, number>;
+  seriesByLang: Record<string, number>;
+  usersByLang: Record<string, number>;
 } {
   const count = (table: string): number =>
     Number((database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n);
+  // Til bo'yicha son; bot_users.lang NULL = til tanlamagan ("-").
+  const byLang = (table: string): Record<string, number> =>
+    Object.fromEntries(
+      (
+        database
+          .prepare(`SELECT COALESCE(lang, '-') AS lang, COUNT(*) AS n FROM ${table} GROUP BY 1`)
+          .all() as Array<{ lang: string; n: number }>
+      ).map((row) => [row.lang, Number(row.n)]),
+    );
   const users = database
     .prepare(
       `SELECT COUNT(*) AS total,
@@ -741,6 +758,9 @@ export function getBotStats(): {
     moviePosts: count("movie_posts"),
     series: count("series"),
     episodes: count("series_episodes"),
+    moviesByLang: byLang("movies"),
+    seriesByLang: byLang("series"),
+    usersByLang: byLang("bot_users"),
   };
 }
 

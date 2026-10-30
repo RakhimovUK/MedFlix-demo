@@ -5,6 +5,7 @@ import {
   findMovie,
   findSeries,
   getBotStats,
+  getDatabasePath,
   getSetting,
   listBroadcastRecipients,
   listMovies,
@@ -191,18 +192,22 @@ export async function runBroadcastJob(
   }
 }
 
+// Oxirgi sendDatabaseBackup xatosi (avto-zaxira natijasini saqlash uchun).
+let lastBackupError: string | null = null;
+
 export async function sendDatabaseBackup(
   chatId: number,
   label = "🗄 Baza zaxira nusxasi",
-): Promise<void> {
+): Promise<boolean> {
   const directory = mkdtempSync(path.join(tmpdir(), "medflix-backup-"));
   try {
     const filePath = path.join(directory, "kino-bot.sqlite");
     createDatabaseBackup(filePath);
     const size = statSync(filePath).size;
     if (size > 49 * 1024 * 1024) {
+      lastBackupError = "baza 50 MB dan katta";
       await sendText(chatId, "Baza 50 MB dan katta, Telegram orqali yuborib bo‘lmaydi.");
-      return;
+      return false;
     }
 
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
@@ -223,9 +228,12 @@ export async function sendDatabaseBackup(
     if (!response.ok || !payload.ok) {
       throw new Error(payload.description ?? `Telegram API error: ${response.status}`);
     }
+    return true;
   } catch (err: unknown) {
+    lastBackupError = (err instanceof Error ? err.message : String(err)).slice(0, 200);
     logger.error({ err }, "Failed to send database backup");
     await sendText(chatId, "Zaxira nusxasini yuborib bo‘lmadi. Loglarni tekshiring.");
+    return false;
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -246,14 +254,22 @@ export function startAutoBackup(): void {
         return;
       }
       setSetting("last_auto_backup_date", todayKey(now));
+      lastBackupError = null;
+      let delivered = 0;
       for (const adminId of getAdminIds()) {
         const adminChatId = Number(adminId);
-        if (Number.isSafeInteger(adminChatId)) {
-          await sendDatabaseBackup(adminChatId, "🗄 Avto-zaxira");
+        if (Number.isSafeInteger(adminChatId) && (await sendDatabaseBackup(adminChatId, "🗄 Avto-zaxira"))) {
+          delivered += 1;
         }
       }
-      logger.info("Daily auto backup sent");
+      // /stats shu ikki sozlamadan zaxira haqiqatan yetib borganini ko'rsatadi.
+      if (delivered > 0) {
+        setSetting("last_auto_backup_ok_at", now.toISOString());
+      }
+      setSetting("last_auto_backup_error", delivered > 0 ? "" : lastBackupError ?? "hech bir adminga yuborilmadi");
+      logger.info({ delivered }, "Daily auto backup finished");
     } catch (err: unknown) {
+      setSetting("last_auto_backup_error", (err instanceof Error ? err.message : String(err)).slice(0, 200));
       logger.error({ err }, "Auto backup failed");
     }
   };
@@ -326,6 +342,16 @@ export async function handleBackupCommand(ctx: CommandContext): Promise<void> {
 
 export async function handleStatsCommand(ctx: CommandContext): Promise<void> {
   const { chatId, userId, message, text, command, args } = ctx;
-  await sendText(chatId, formatStatsMessage(getBotStats()));
+  await sendText(
+    chatId,
+    formatStatsMessage(getBotStats(), {
+      databasePath: getDatabasePath(),
+      backup: {
+        enabled: (process.env.AUTO_BACKUP ?? "").toLowerCase() !== "off",
+        lastOkAt: getSetting("last_auto_backup_ok_at") || null,
+        lastError: getSetting("last_auto_backup_error") || null,
+      },
+    }),
+  );
   return;
 }

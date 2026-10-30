@@ -290,6 +290,24 @@ export const MESSAGES = {
   "fav.added": { uz: "⭐ Sevimlilarga qo‘shildi.", ru: "⭐ Добавлено в избранное.", en: "⭐ Added to favorites." },
   "fav.removed": { uz: "Sevimlilardan olib tashlandi.", ru: "Удалено из избранного.", en: "Removed from favorites." },
 
+  // Kanal mundarijasi postlari (har til o'z postlarida)
+  "contents.header": { uz: "📚 MEDFLIX — MUNDARIJA", ru: "📚 MEDFLIX — СОДЕРЖАНИЕ", en: "📚 MEDFLIX — CONTENTS" },
+  "contents.movies": { uz: "🎬 KINOLAR", ru: "🎬 ФИЛЬМЫ", en: "🎬 MOVIES" },
+  "contents.series": { uz: "📺 SERIALLAR", ru: "📺 СЕРИАЛЫ", en: "📺 SERIES" },
+  "contents.continued": { uz: "{section} (davomi)", ru: "{section} (продолжение)", en: "{section} (continued)" },
+  "contents.episodes": { uz: "{n} qism", ru: "{n} сер.", en: "{n} eps" },
+  "contents.footer": {
+    uz: "🔎 Kino nomini bosing yoki kodni botga yuboring.",
+    ru: "🔎 Нажмите на название фильма или отправьте код боту.",
+    en: "🔎 Tap a movie title or send its code to the bot.",
+  },
+  "contents.empty": { uz: "Hali kino qo‘shilmagan.", ru: "Фильмов пока нет.", en: "No movies yet." },
+  "contents.placeholder": {
+    uz: "Bu post hozircha bo‘sh. Mundarija davomi shu yerga yoziladi.",
+    ru: "Этот пост пока пуст. Продолжение содержания появится здесь.",
+    en: "This post is empty for now. More contents will appear here.",
+  },
+
   // Umumiy xatolar
   "error.badButton": { uz: "Tugma ma’lumotini o‘qib bo‘lmadi.", ru: "Не удалось прочитать данные кнопки.", en: "Couldn't read the button data." },
   "error.unknownButton": { uz: "Noma’lum tugma.", ru: "Неизвестная кнопка.", en: "Unknown button." },

@@ -70,8 +70,11 @@ import {
   telegramApi,
   token,
 } from "./telegram-state";
+import type { Lang } from "./i18n";
 import {
+  EXTRA_CONTENTS_LANGS,
   contentsCache,
+  contentsSettingKey,
   getContentsPostReferences,
   getPublicContentsPostReferences,
   getStructurePostReference,
@@ -224,24 +227,45 @@ export async function handleRestrictedCommand(ctx: CommandContext): Promise<void
 }
 
 export async function handleSetcontentsCommand(ctx: CommandContext): Promise<void> {
-  const { chatId, userId, message, text, command, args } = ctx;
-  const tokens = args.split(/[\s,]+/).filter(Boolean);
+  const { chatId, args } = ctx;
+  const allTokens = args.split(/[\s,]+/).filter(Boolean);
+  // Birinchi so'z ru/en bo'lsa — o'sha til mundarijasi; aks holda o'zbekcha (eski format).
+  const first = allTokens[0]?.toLowerCase();
+  const lang: Lang = first === "ru" || first === "en" || first === "uz" ? first : "uz";
+  const tokens = first === lang ? allTokens.slice(1) : allTokens;
+  const label = lang.toUpperCase();
+
+  if (lang !== "uz" && tokens.length === 1 && tokens[0].toLowerCase() === "off") {
+    setSetting(contentsSettingKey(lang), "[]");
+    contentsCache.clear();
+    await updateStructurePost();
+    await sendText(chatId, `${label} mundarija postlari o‘chirildi. ${label} foydalanuvchilarga inline katalog ko‘rsatiladi.`);
+    return;
+  }
+
   const references = tokens.map((token) => parseTelegramPostLink(token));
   const valid =
     tokens.length > 0 && references.every((reference) => reference !== null);
 
   if (!valid) {
+    const current = (l: Lang) => {
+      const refs = getContentsPostReferences(l);
+      return refs.length > 0
+        ? refs.map((reference, index) => `${index + 1}. ${formatTelegramPostLink(reference)}`)
+        : ["yo‘q (inline katalog)"];
+    };
     await sendText(
       chatId,
       [
-        "Format: /setcontents LINK1 LINK2 LINK3 ...",
-        "Joriy mundarija postlari:",
-        ...getContentsPostReferences().map(
-          (reference, index) =>
-            `${index + 1}. ${formatTelegramPostLink(reference)}`,
-        ),
+        "Format: /setcontents [ru|en] LINK1 LINK2 LINK3 ...",
+        "Til yozilmasa — o‘zbekcha. ru/en ni o‘chirish: /setcontents ru off",
+        "",
+        "UZ mundarija postlari:",
+        ...current("uz"),
+        ...EXTRA_CONTENTS_LANGS.flatMap((l) => ["", `${l.toUpperCase()} mundarija postlari:`, ...current(l)]),
         "",
         "Masalan: /setcontents https://t.me/c/KANAL_ID/22 https://t.me/c/KANAL_ID/23",
+        "Rus tili: /setcontents ru https://t.me/c/KANAL_ID/30 https://t.me/c/KANAL_ID/31",
         "Bot target kanalda postlarni tahrirlash huquqiga ega bo‘lishi kerak.",
       ].join("\n"),
     );
@@ -249,14 +273,14 @@ export async function handleSetcontentsCommand(ctx: CommandContext): Promise<voi
   }
 
   const list = references as TelegramPostReference[];
-  setSetting("contents_posts", JSON.stringify(list));
+  setSetting(contentsSettingKey(lang), JSON.stringify(list));
   contentsCache.clear();
   await updateStructurePost();
   const updated = await refreshContentsPost();
   await sendText(
     chatId,
     updated
-      ? `Mundarija postlari sozlandi (${list.length} ta) va yangilandi.`
+      ? `${label} mundarija postlari sozlandi (${list.length} ta) va yangilandi.`
       : "Postlar manzili saqlandi, lekin ba‘zilarini tahrirlab bo‘lmadi. Botning kanal huquqlarini tekshiring.",
   );
   return;

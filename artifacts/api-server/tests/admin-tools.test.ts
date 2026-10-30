@@ -79,4 +79,30 @@ test("stats: foydalanuvchilar hisobi va xabar formati", () => {
   assert.equal(stats.episodes, 3);
   const text = formatStatsMessage(stats);
   assert.ok(text.includes("Foydalanuvchilar: 2") && text.includes("Seriallar: 1 ta (3 ta qism)"));
+  // Til bo'yicha: seriallar uz, foydalanuvchilar til tanlamagan.
+  assert.deepEqual(stats.seriesByLang, { uz: 1 });
+  assert.equal(stats.usersByLang?.["-"], 2);
+  assert.ok(text.includes("• Til: uz 0 · ru 0 · en 0 · tanlamagan 2"));
+  assert.ok(text.includes("• uz 1 · ru 0 · en 0"));
+  assert.ok(!text.includes("Baza fayli"));
+});
+
+test("stats: baza fayli va avto-zaxira holati", () => {
+  const stats = db.getBotStats();
+  const ok = formatStatsMessage(stats, {
+    databasePath: "/data/kino-bot.sqlite",
+    backup: { enabled: true, lastOkAt: "2026-10-29T21:00:12.000Z", lastError: null },
+  });
+  assert.ok(ok.includes("💾 Baza fayli: /data/kino-bot.sqlite"));
+  assert.ok(ok.includes("🗄 Avto-zaxira: oxirgi muvaffaqiyatli: 2026-10-29 21:00 UTC"));
+  assert.ok(!ok.includes("⚠️"));
+
+  const failed = formatStatsMessage(stats, {
+    backup: { enabled: true, lastOkAt: null, lastError: "Bad Request: chat not found" },
+  });
+  assert.ok(failed.includes("hali yuborilmagan") && failed.includes("⚠️ Oxirgi xato: Bad Request: chat not found"));
+
+  const off = formatStatsMessage(stats, { backup: { enabled: false, lastOkAt: null, lastError: null } });
+  assert.ok(off.includes("o‘chirilgan (AUTO_BACKUP=off)"));
+  assert.ok(db.getDatabasePath().endsWith("t.sqlite"));
 });

@@ -124,13 +124,13 @@ export async function sendContents(chatId: number): Promise<void> {
     return;
   }
 
-  // Mundarija postlari kanalda o'zbekcha; boshqa tillar uchun inline katalog.
-  if (currentLang() !== "uz") {
+  // Har til o'z mundarija postlaridan; ru/en postlari sozlanmagan bo'lsa — inline katalog.
+  const refs = getContentsPostReferences(currentLang());
+  if (refs.length === 0) {
     await sendCatalog(chatId);
     return;
   }
 
-  const refs = getContentsPostReferences();
   const pageCount = buildContentsPages(movies, series, botInfo.username).length;
   const result = await copyContentsPosts({
     refs,

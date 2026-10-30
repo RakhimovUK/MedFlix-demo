@@ -59,22 +59,25 @@ Arxitektura:
 - `bot_users.lang`: NULL = tanlamagan -> `uz`. Admin `/lang uz|ru|en` — admin ish tili.
 - Kod topilmasa: "«1» kodi … tilida hali biriktirilmagan" + boshqa tillarda borligi + 📚 Katalog tugmasi.
   Nom topilmasa: avtomatik so'rov + 📚 Katalog. So'rov kartasida 🌐 til, admin javoblari foydalanuvchi tilida.
-- `/catalog`: `uz` — kanal mundarija postlari; `ru/en` — inline katalog.
+- `/catalog`: har til o'z mundarija postlaridan (`contents_posts`, `contents_posts_ru`, `contents_posts_en`);
+  ru/en postlari sozlanmagan bo'lsa — inline katalog. Admin: `/setcontents [ru|en] LINK...`, `/setcontents ru off`.
+  ru/en mundarija havolalari `?start=ru_101` — kod o'sha tilda ochiladi (foydalanuvchi tili o'zgarmaydi).
+- `/stats`: tillar bo'yicha son, baza fayli manzili, avto-zaxira holati (`last_auto_backup_ok_at/_error`).
 - Mini post: `/synopsis KOD | matn` -> qoralama -> admin ✅ -> foydalanuvchida "ℹ️ Haqida". `/delsynopsis KOD`.
 
 ## Bajarilganlar (tarix)
 Kod tartibi, sub-kodlar (1.A), qism navigatsiyasi, mundarija (5 post + `/setpubcontents`), `/deletepart`,
 serial auto-delete, poster (`/setposter`), so'rovlar topic (✅/❌/💬), post parser, aqlli qidiruv, `/alias`,
 avtomatik so'rov, `/restrict`, telegram.ts bo'linishi, Railway deploy, 3 tilli bot (1–13 vazifalar),
-polling uzilishlarida jim qayta ulanish (`alerts.ts`).
+polling uzilishlarida jim qayta ulanish (`alerts.ts`), ru/en kanal mundarijasi, `/stats` monitoring.
 
 ## Navbat (tartib bilan)
 1. Haqiqiy botda sinov natijalarini kutish: ru/en kino qo'shish, til tanlash, so'rovlar. Xatolarni tuzatish.
 2. Railway Volume va `DATABASE_PATH` borligini egasidan tasdiqlatish (yo'q bo'lsa — birinchi navbatda).
-3. Rus/ingliz kanal mundarijasi (alohida postlar, `/setcontents` ga til qo'shish).
-4. Monitoring: zaxira nusxalar haqiqatan olinayotganini tekshirish, `/stats` da tillar bo'yicha son.
-5. Eski kinolar migratsiyasi (kerak bo'lsa).
-6. xFilms klon boti (`RakhimovUK/xFilms-demo`, brend xFilms, bot xFilmsRobot) — shu kod asosida.
+   `/stats` dagi "💾 Baza fayli" `/data/...` bo'lishi kerak (standart `<cwd>/data/kino-bot.sqlite` — Volume emas).
+3. Egasi kanalda ru/en mundarija postlarini ochib, `/setcontents ru ...` / `/setcontents en ...` qilishi.
+4. Eski kinolar migratsiyasi (kerak bo'lsa) — avval egasidan qaysi kinolar ekanini so'ra.
+5. xFilms klon boti (`RakhimovUK/xFilms-demo`, brend xFilms, bot xFilmsRobot) — shu kod asosida.
 
 ## Ehtiyot bo'l
 - Bot nusxasi ikkita bo'lmasin; token faqat Railway Variables'da.

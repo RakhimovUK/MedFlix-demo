@@ -47,7 +47,7 @@ export async function configureBotCommands(): Promise<void> {
     { command: "delalias", description: "Muqobil so‘zni o‘chirish" },
     { command: "setstart", description: "Start videosini o‘rnatish" },
     { command: "setstructure", description: "Avto-yangilanadigan postni sozlash" },
-    { command: "setcontents", description: "Mundarija postini sozlash" },
+    { command: "setcontents", description: "Mundarija postlari (uz, ru, en)" },
     { command: "setpubcontents", description: "Ochiq kanal mundarijasi" },
     { command: "lang", description: "Admin ish tili (uz/ru/en)" },
     { command: "synopsis", description: "Mini post (Haqida) qo‘shish/ko‘rish" },

@@ -1,3 +1,5 @@
+import { currentLang, t, type Lang } from "./i18n";
+
 export type TelegramPostReference = {
   chatId: string;
   messageId: number;
@@ -76,11 +78,26 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+/** Deep-link payload: uz — faqat kod ("101"), ru/en — til bilan ("ru_101"), shunda kod o'sha tilda ochiladi. */
+export function buildStartPayload(code: string, lang: Lang = currentLang()): string {
+  return lang === "uz" ? code : `${lang}_${code}`;
+}
+
+/** /start payload'ini o'qiydi: "ru_101" -> { lang: "ru", code: "101" }; tilsiz -> lang null. */
+export function parseStartPayload(payload: string): { lang: Lang | null; code: string } {
+  const match = /^(uz|ru|en)_(.+)$/i.exec(payload.trim());
+  if (!match) {
+    return { lang: null, code: payload.trim() };
+  }
+  return { lang: match[1].toLowerCase() as Lang, code: match[2] };
+}
+
 function buildBotLink(botUsername: string, code: string): string | null {
-  if (!botUsername || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) {
+  const payload = buildStartPayload(code);
+  if (!botUsername || !/^[A-Za-z0-9_-]{1,64}$/.test(payload)) {
     return null;
   }
-  return `https://t.me/${botUsername}?start=${code}`;
+  return `https://t.me/${botUsername}?start=${payload}`;
 }
 
 export function buildContentsPages(
@@ -96,16 +113,16 @@ export function buildContentsPages(
   type Entry = { section: string; code: string; title: string; suffix: string };
   const entries: Entry[] = [
     ...movies.map((movie) => ({
-      section: "🎬 KINOLAR",
+      section: t("contents.movies"),
       code: movie.code,
       title: movie.title,
       suffix: "",
     })),
     ...series.map((item) => ({
-      section: "📺 SERIALLAR",
+      section: t("contents.series"),
       code: item.code,
       title: item.title,
-      suffix: ` (${item.episodeCount} qism)`,
+      suffix: ` (${t("contents.episodes", { n: item.episodeCount })})`,
     })),
   ];
 
@@ -143,7 +160,7 @@ export function buildContentsPages(
       }
       const heading =
         entry.section === lastSection && body.length === 0
-          ? `${entry.section} (davomi)`
+          ? t("contents.continued", { section: entry.section })
           : entry.section;
       body.push(heading);
       visible += heading.length + 1;
@@ -166,17 +183,17 @@ export function buildContentsPages(
   closePage();
 
   if (pages.length === 0) {
-    pages.push(["Hali kino qo‘shilmagan."]);
+    pages.push([t("contents.empty")]);
   }
 
   return pages.map((lines, index) => {
     const counter = pages.length > 1 ? ` (${index + 1}/${pages.length})` : "";
     return [
-      `📚 MEDFLIX — MUNDARIJA${counter}`,
+      `${t("contents.header")}${counter}`,
       "",
       ...lines,
       "",
-      "🔎 Kino nomini bosing yoki kodni botga yuboring.",
+      t("contents.footer"),
     ].join("\n");
   });
 }

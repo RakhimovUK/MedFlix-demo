@@ -16,6 +16,7 @@ import {
   translate,
 } from "./i18n";
 import { buildLanguagePicker, parseSetLangData } from "./language-picker";
+import { parseStartPayload } from "./catalog-content";
 import { protectFor } from "./restriction-runtime";
 import { getStartKeyboard } from "./telegram-subscription";
 import { logger } from "../lib/logger";
@@ -321,6 +322,18 @@ export async function deliverByCode(chatId: number, code: string): Promise<boole
   return false;
 }
 
+/**
+ * /start deep-link: "ru_101" (ru/en mundarijadan) — 101 rus tilida ochiladi, foydalanuvchi tili
+ * o'zgarmaydi; tilsiz "101" — joriy tilda. Topilsa true.
+ */
+export async function deliverStartPayload(chatId: number, payload: string): Promise<boolean> {
+  const { lang, code } = parseStartPayload(payload);
+  const normalized = normalizeCode(code);
+  return lang
+    ? runWithLang(lang, () => deliverByCode(chatId, normalized))
+    : deliverByCode(chatId, normalized);
+}
+
 /** Start ekrani: start video (bo'lsa), salom matni va asosiy tugmalar. */
 export async function sendWelcome(chatId: number, userId: number): Promise<void> {
   const lines = [t("start.welcome")];
@@ -398,11 +411,11 @@ export async function handleSetLanguageCallback(
 
   // Qolgan ish yangi tanlangan tilda.
   await runWithLang(parsed.lang, async () => {
-    if (parsed.payload && (await deliverByCode(chatId, parsed.payload))) {
+    if (parsed.payload && (await deliverStartPayload(chatId, parsed.payload))) {
       return;
     }
     if (parsed.payload) {
-      await sendCodeNotFound(chatId, parsed.payload);
+      await sendCodeNotFound(chatId, normalizeCode(parseStartPayload(parsed.payload).code));
       return;
     }
     await sendWelcome(chatId, userId);

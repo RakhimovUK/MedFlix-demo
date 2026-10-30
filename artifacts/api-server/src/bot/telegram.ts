@@ -50,7 +50,7 @@ import {
 } from "./telegram-admin-ops";
 import { getStartKeyboard, requireSubscription } from "./telegram-subscription";
 import {
-  deliverByCode,
+  deliverStartPayload,
   displayName,
   handleCatalogCommand,
   handleIdCommand,
@@ -198,7 +198,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const ctx: CommandContext = { chatId, userId, message, text, command, args };
 
     if (command === "/start" && args) {
-      if (await deliverByCode(chatId, normalizeCode(args))) {
+      if (await deliverStartPayload(chatId, args)) {
         return;
       }
     }

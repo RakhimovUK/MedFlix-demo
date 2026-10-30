@@ -90,20 +90,55 @@ export type BotStats = {
   moviePosts: number;
   series: number;
   episodes: number;
+  moviesByLang?: Record<string, number>;
+  seriesByLang?: Record<string, number>;
+  usersByLang?: Record<string, number>;
 };
 
-export function formatStatsMessage(stats: BotStats): string {
-  return [
+/** Avto-zaxira holati (settings: last_auto_backup_ok_at / last_auto_backup_error). */
+export type BackupStatus = {
+  enabled: boolean;
+  lastOkAt: string | null;
+  lastError: string | null;
+};
+
+/** "uz 10 · ru 3 · en 0" ("-" = til tanlamagan). */
+export function formatLangCounts(counts: Record<string, number> | undefined): string {
+  const c = counts ?? {};
+  const parts = ["uz", "ru", "en"].map((lang) => `${lang} ${c[lang] ?? 0}`);
+  if (c["-"]) parts.push(`tanlamagan ${c["-"]}`);
+  return parts.join(" · ");
+}
+
+export function formatBackupStatus(status: BackupStatus): string {
+  if (!status.enabled) return "🗄 Avto-zaxira: o‘chirilgan (AUTO_BACKUP=off)";
+  const ok = status.lastOkAt ? `oxirgi muvaffaqiyatli: ${status.lastOkAt.slice(0, 16).replace("T", " ")} UTC` : "hali yuborilmagan";
+  return status.lastError ? `🗄 Avto-zaxira: ${ok}\n⚠️ Oxirgi xato: ${status.lastError}` : `🗄 Avto-zaxira: ${ok}`;
+}
+
+export function formatStatsMessage(
+  stats: BotStats,
+  extra: { backup?: BackupStatus; databasePath?: string } = {},
+): string {
+  const lines = [
     "📊 MEDFLIX — STATISTIKA",
     "",
     `👥 Foydalanuvchilar: ${stats.users}`,
     `• 24 soatda faol: ${stats.activeDay}`,
     `• 7 kunda faol: ${stats.activeWeek}`,
     `• 24 soatda yangi: ${stats.newDay}`,
+    `• Til: ${formatLangCounts(stats.usersByLang)}`,
     "",
     `🎬 Kinolar: ${stats.movies} ta (${stats.moviePosts} ta post)`,
+    `• ${formatLangCounts(stats.moviesByLang)}`,
     `📺 Seriallar: ${stats.series} ta (${stats.episodes} ta qism)`,
-    "",
-    "ℹ️ Foydalanuvchilar hisobi shu funksiya qo‘shilgandan boshlab yuritiladi.",
-  ].join("\n");
+    `• ${formatLangCounts(stats.seriesByLang)}`,
+  ];
+  if (extra.backup || extra.databasePath) {
+    lines.push("");
+    if (extra.databasePath) lines.push(`💾 Baza fayli: ${extra.databasePath}`);
+    if (extra.backup) lines.push(formatBackupStatus(extra.backup));
+  }
+  lines.push("", "ℹ️ Foydalanuvchilar hisobi shu funksiya qo‘shilgandan boshlab yuritiladi.");
+  return lines.join("\n");
 }

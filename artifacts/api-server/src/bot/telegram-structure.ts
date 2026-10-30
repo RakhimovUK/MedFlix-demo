@@ -10,7 +10,16 @@ import { getPostsChannelId, getRequiredSubscriptions } from "./config";
 import { getSetting, listGenres, listMovies, listSeries, runWithLang } from "./database";
 import { logger } from "../lib/logger";
 import { parseStoredPostRefs } from "./contents-delivery";
+import { t, type Lang } from "./i18n";
 import { botInfo, telegramApi } from "./telegram-state";
+
+/** ru/en mundarija postlari alohida: /setcontents ru|en ... yoki CONTENTS_POST_LINKS_RU/_EN. */
+export const EXTRA_CONTENTS_LANGS = ["ru", "en"] as const satisfies readonly Lang[];
+export type ExtraContentsLang = (typeof EXTRA_CONTENTS_LANGS)[number];
+
+export function contentsSettingKey(lang: Lang): string {
+  return lang === "uz" ? "contents_posts" : `contents_posts_${lang}`;
+}
 
 /** Env'dan post havolalarini o'qiydi (vergul yoki bo'shliq bilan ajratilgan t.me havolalari). */
 export function readPostLinksFromEnv(name: string): TelegramPostReference[] {
@@ -53,7 +62,17 @@ export function getStructurePostReference(): TelegramPostReference {
   return defaultStructurePost;
 }
 
-export function getContentsPostReferences(): TelegramPostReference[] {
+/**
+ * Til bo'yicha baza kanal mundarija postlari. uz — doim bor (standart 22–26);
+ * ru/en — faqat sozlangan bo'lsa, aks holda bo'sh ro'yxat (foydalanuvchiga inline katalog).
+ */
+export function getContentsPostReferences(lang: Lang = "uz"): TelegramPostReference[] {
+  if (lang !== "uz") {
+    return (
+      parseStoredPostRefs(getSetting(contentsSettingKey(lang))) ??
+      readPostLinksFromEnv(`CONTENTS_POST_LINKS_${lang.toUpperCase()}`)
+    );
+  }
   try {
     const raw = getSetting("contents_posts");
     if (raw) {
@@ -110,6 +129,12 @@ export function formatStructurePost(): string {
         ? `• ${index + 1}-qism: ${formatTelegramPostLink(ref)}`
         : `• ${formatTelegramPostLink(ref)}`,
     );
+  for (const lang of EXTRA_CONTENTS_LANGS) {
+    const refs = getContentsPostReferences(lang);
+    if (refs.length > 0) {
+      contentsLines.push(`• ${lang.toUpperCase()}: ${refs.map(formatTelegramPostLink).join(" ")}`);
+    }
+  }
 
   return [
     "🩺 MEDFLIX BOT — TIZIM MA’LUMOTI",
@@ -154,7 +179,7 @@ export function formatStructurePost(): string {
     "• /delalias KOD | so‘z — muqobil so‘zni o‘chirish",
     "• /setstart",
     "• /setstructure POST_LINK",
-    "• /setcontents POST_LINK",
+    "• /setcontents [ru|en] POST_LINK",
     "• /delete KOD",
     "• /list",
     `• Start video: ${startVideoConfigured ? "sozlangan" : "sozlanmagan"}`,
@@ -183,7 +208,21 @@ async function refreshContentsPostInner(): Promise<boolean> {
       publicOk = false;
     }
   }
-  return baseOk && publicOk;
+  // ru/en: o'z tilidagi kinolar, o'z postlari, matnlar shu tilda (sozlanmagan til o'tkaziladi).
+  let extraOk = true;
+  for (const lang of EXTRA_CONTENTS_LANGS) {
+    const refs = getContentsPostReferences(lang);
+    if (refs.length === 0) continue;
+    const ok = await runWithLang(lang, () =>
+      updateContentsPosts(
+        refs,
+        buildContentsPages(listMovies(lang), listSeries(lang), botInfo.username),
+        getStructurePostReference(),
+      ),
+    );
+    if (!ok) extraOk = false;
+  }
+  return baseOk && publicOk && extraOk;
 }
 
 /** Berilgan postlarni sahifalar bilan tahrirlaydi. structure — tizim posti (o'tkazib yuboriladi). */
@@ -215,7 +254,7 @@ async function updateContentsPosts(
     let text =
       index < pages.length
         ? pages[index]
-        : `📚 MEDFLIX — MUNDARIJA (${index + 1}/${refs.length})\n\nBu post hozircha bo‘sh. Mundarija davomi shu yerga yoziladi.`;
+        : `${t("contents.header")} (${index + 1}/${refs.length})\n\n${t("contents.placeholder")}`;
     if (dropped > 0 && index === refs.length - 1) {
       text += `\n\n⚠️ Joy yetmadi: yana ${dropped} sahifa yozilmadi. /setcontents bilan qo‘shimcha post qo‘shing.`;
     }
