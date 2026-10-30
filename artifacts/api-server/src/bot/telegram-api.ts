@@ -32,13 +32,23 @@ export function createTelegramApi(options: {
     method: string,
     body: Record<string, unknown>,
   ): Promise<T> {
+    // So'rov osilib qolmasin: getUpdates uzun kutadi (timeout + zaxira), qolganlari 30 s.
+    const pollSeconds = method === "getUpdates" && typeof body.timeout === "number" ? body.timeout : 0;
+    const timeoutMs = (pollSeconds + 30) * 1000;
     const response = await doFetch(apiUrl(method), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
-    const payload = (await response.json()) as TelegramResponse<T>;
+    let payload: TelegramResponse<T>;
+    try {
+      payload = (await response.json()) as TelegramResponse<T>;
+    } catch {
+      // Masalan Telegram 502 da HTML qaytaradi.
+      throw new Error(`Telegram API error: ${response.status}`);
+    }
     if (!response.ok || !payload.ok) {
       throw new Error(
         payload.description ?? `Telegram API error: ${response.status}`,

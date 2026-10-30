@@ -48,3 +48,16 @@ test("Telegram xatosi Error bo'lib ko'tariladi (tavsif bilan)", async () => {
   await assert.rejects(() => api.sendText(1, "x"), /chat not found/);
   assert.deepEqual(outgoing, []);
 });
+
+test("HTML (JSON emas) javobda tushunarli xato, so'rovga timeout signal qo'shiladi", async () => {
+  let signal: AbortSignal | undefined;
+  const api = createTelegramApi({
+    token: "T",
+    fetchImpl: async (_url, init) => {
+      signal = init?.signal ?? undefined;
+      return { ok: false, status: 502, json: async () => { throw new SyntaxError("Unexpected token <"); } } as unknown as Response;
+    },
+  });
+  await assert.rejects(api.telegramApi("getUpdates", { timeout: 25 }), /Telegram API error: 502/);
+  assert.ok(signal instanceof AbortSignal);
+});

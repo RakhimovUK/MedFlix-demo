@@ -13,8 +13,10 @@ import { resolveVersion, runGit } from "./version-info";
 import {
   alertKey,
   createAlertThrottle,
+  createOutageTracker,
   formatAlert,
   isIgnorableTelegramError,
+  isTransientNetworkError,
 } from "./alerts";
 import { createRateLimiter, type RateDecision } from "./rate-limiter";
 import type { TelegramUpdate } from "./telegram-types";
@@ -117,6 +119,55 @@ export function notifyAdminsOfError(source: string, err: unknown): void {
     }
   } catch (alertErr: unknown) {
     logger.warn({ alertErr }, "Admin alert failed");
+  }
+}
+
+function sendToAdmins(text: string): void {
+  for (const adminId of getAdminIds()) {
+    const adminChatId = Number(adminId);
+    if (!Number.isSafeInteger(adminChatId)) continue;
+    sendText(adminChatId, text).catch((sendErr: unknown) =>
+      logger.warn({ sendErr }, "Failed to send admin alert"),
+    );
+  }
+}
+
+const pollingOutage = createOutageTracker();
+let pollingFailures = 0;
+
+/**
+ * Polling xatosi. Qisqa tarmoq uzilishida adminni bezovta qilmaydi (bot o'zi qayta ulanadi);
+ * uzilish 3 daqiqadan oshsa bir marta xabar beradi. Qayta urinishdan oldin kutish vaqtini (ms) qaytaradi.
+ */
+export function handlePollingError(err: unknown): number {
+  pollingFailures += 1;
+  if (!isTransientNetworkError(err)) {
+    logger.error({ err }, "Telegram polling error");
+    notifyAdminsOfError("Telegram polling", err);
+    return 5000;
+  }
+  logger.warn({ err, failures: pollingFailures }, "Telegram polling network error, retrying");
+  const downMs = pollingOutage.failure();
+  if (downMs !== undefined) {
+    sendToAdmins(
+      [
+        "⚠️ MEDFLIX: Telegram bilan aloqa yo'q",
+        `${Math.round(downMs / 60000)} daqiqadan beri server Telegram'ga ulana olmayapti.`,
+        "Bot o'zi qayta urinmoqda. Tiklansa xabar beraman.",
+        formatAlert("Telegram polling", err).split("\n").slice(2).join("\n"),
+      ].join("\n"),
+    );
+  }
+  // 1 s, 2 s, 4 s ... eng ko'pi 30 s.
+  return Math.min(1000 * 2 ** (pollingFailures - 1), 30000);
+}
+
+/** Polling muvaffaqiyatli: uzilish haqida xabar berilgan bo'lsa, tiklanganini aytadi. */
+export function handlePollingSuccess(): void {
+  pollingFailures = 0;
+  const downMs = pollingOutage.success();
+  if (downMs !== undefined) {
+    sendToAdmins(`✅ MEDFLIX: Telegram bilan aloqa tiklandi (${Math.max(1, Math.round(downMs / 60000))} daqiqa uzilish).`);
   }
 }
 

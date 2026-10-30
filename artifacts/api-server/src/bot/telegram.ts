@@ -17,8 +17,9 @@ import { buildAdminPanelKeyboard } from "./admin-panel";
 import type { CommandContext, TelegramMessage, TelegramUpdate } from "./telegram-types";
 import {
   botInfo,
+  handlePollingError,
+  handlePollingSuccess,
   handleRateLimited,
-  notifyAdminsOfError,
   pendingForwardedPosts,
   pendingPosterRequests,
   rateLimiter,
@@ -479,6 +480,7 @@ async function poll(): Promise<void> {
         timeout: 25,
         allowed_updates: ["message", "callback_query"],
       });
+      handlePollingSuccess();
 
       for (const update of updates) {
         offset = update.update_id + 1;
@@ -515,9 +517,8 @@ async function poll(): Promise<void> {
       }
       await updateQueue.waitForCapacity(200);
     } catch (err: unknown) {
-      logger.error({ err }, "Telegram polling error");
-      notifyAdminsOfError("Telegram polling", err);
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      const delayMs = handlePollingError(err);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 }
